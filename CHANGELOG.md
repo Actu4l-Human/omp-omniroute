@@ -1,5 +1,12 @@
 # Changelog
 
+## [1.2.1](https://github.com/Actu4l-Human/omp-omniroute/compare/v1.2.0...v1.2.1) (2026-11-08)
+
+
+### Bug Fixes
+
+* avoided redundant model rebinding and hardened cost telemetry ([55c5411](https://github.com/Actu4l-Human/omp-omniroute/commit/55c541158ca97353503fda7e52e9846f96aac979))
+
 ## [1.2.0](https://github.com/Actu4l-Human/omp-omniroute/compare/v1.1.0...v1.2.0) (2026-11-08)
 
 
