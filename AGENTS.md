@@ -17,6 +17,7 @@ This TypeScript extension registers a self-hosted OmniRoute gateway as OMP provi
 - `src/`: flat runtime modules; keep transport, mapping, and lifecycle responsibilities separate.
 - `test/`: Node unit/lifecycle suites, Bun SDK integrations, and standalone actual-CLI smoke orchestration. There is no separate scripts directory.
 - `docs/`: operational reference and source-backed compatibility evidence; update relevant documentation when behavior changes.
+- `.github/workflows/`: reusable CI and Release Please/GitHub Packages publishing. Keep write permissions confined to release metadata and publishing jobs.
 
 ## Development Commands
 
@@ -28,6 +29,7 @@ npm.cmd test
 npm.cmd run typecheck
 npm.cmd run test:integration
 npm.cmd run test:cli
+npm.cmd pack --ignore-scripts --dry-run
 ```
 
 Focused unit check: `node --test test/doctor.test.ts`.
@@ -53,6 +55,8 @@ There is no build, lint, or formatter script. TypeScript checking uses `noEmit`;
 ## Important Files
 
 - `package.json`, `package-lock.json`: scripts, exact development pins, extension manifest, and Bun installer approval.
+- `release-please-config.json`, `.release-please-manifest.json`: SemVer baseline/policy; Release Please updates package/lock versions, `CHANGELOG.md`, and the annotated README version. Use Conventional Commit titles and squash merges; review generated release notes.
+- `.npmrc` and `package.json`'s `publishConfig` target GitHub Packages for `@actu4l-human/omp-omniroute`. Preserve the package file allowlist; never include `.env` or local profiles. Publishing happens only after the release tarball passes CI.
 - `tsconfig.json`: strict NodeNext/ES2022 checking of `index.ts` and `src/**/*.ts`; tests are excluded.
 - `.env.example`, `overrides.example.json`: configuration examples. Override keys are exact existing model IDs; relative file paths resolve from OMP's working directory.
 - `README.md`: installation and quickstart. `docs/configuration.md`: defaults, commands, mapping, pricing, and troubleshooting.
@@ -68,6 +72,6 @@ Runtime installation needs `index.ts`, `package.json`, and `src/`, not extension
 
 - `test/*.test.ts`: `node:test` with `node:assert/strict`; injected fetch/lifecycle fixtures plus temporary-file override cases.
 - `test/*.integration.ts`: `bun:test`; real SDK streaming/cost/concurrency checks and authenticated loopback embedding/image calls.
-- `test/cli-smoke.ts`: real OMP CLI in a disposable profile, without extension-local dependencies. Preserve fresh-profile automatic discovery, explicit loading, both real read-tool round trips, controls/overrides, and outage fallback.
+- `test/cli-smoke.ts`: real OMP CLI in a disposable profile, without extension-local dependencies. With an optional tarball path, extract and test the packaged extension instead of source copies. Preserve fresh-profile automatic discovery, explicit loading, both real read-tool round trips, controls/overrides, and outage fallback.
 
 For runtime changes, run unit tests and typecheck, then the affected integration/CLI paths. Keep fixtures credential-free, loopback-only, bounded by timeouts, and cleaned up in `finally`/teardown hooks. Assert consumer-visible behavior and failure boundaries; mock registration alone does not prove transport or agent-loop compatibility. Fixtures do not prove live availability, settled billing, or native usage UI rendering. For documentation-only changes, validate referenced commands, paths, and links without contacting the gateway.

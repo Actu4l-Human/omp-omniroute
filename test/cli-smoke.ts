@@ -75,8 +75,14 @@ async function run(args:string[], reported:boolean,extraEnv:Record<string,string
 }
 try {
   const extensionDir=join(root,'agent','extensions','omniroute');await mkdir(extensionDir,{recursive:true});
-  for(const file of ['index.ts','package.json'])await copyFile(resolve(file),join(extensionDir,file));
-  await cp(resolve('src'),join(extensionDir,'src'),{recursive:true});
+  if(process.argv[2]){
+    const unpack=Bun.spawn(['tar','-xzf',resolve(process.argv[2]),'-C',extensionDir,'--strip-components=1'],{stdout:'pipe',stderr:'pipe',timeout:10000});
+    const [stderr,code]=await Promise.all([new Response(unpack.stderr).text(),unpack.exited]);
+    assert.equal(code,0,stderr);
+  }else{
+    for(const file of ['index.ts','package.json'])await copyFile(resolve(file),join(extensionDir,file));
+    await cp(resolve('src'),join(extensionDir,'src'),{recursive:true});
+  }
   const extension=join(extensionDir,'index.ts');
   const discovered=JSON.parse(await run(['models','omniroute','--kind','all','--json'],false));
   assert.deepEqual(records(record(discovered).models).map(m=>({id:m.id,kind:m.kind})).sort((a,b)=>String(a.id).localeCompare(String(b.id))),[

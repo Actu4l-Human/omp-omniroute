@@ -1,9 +1,24 @@
 {
-  "name": "omp-omniroute",
+  "name": "@actu4l-human/omp-omniroute",
   "version": "1.1.0",
-  "private": true,
   "type": "module",
   "description": "A focused dynamic OmniRoute provider extension for Oh My Pi",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/Actu4l-Human/omp-omniroute.git"
+  },
+  "publishConfig": {
+    "registry": "https://npm.pkg.github.com"
+  },
+  "files": [
+    "index.ts",
+    "src/*.ts",
+    "README.md",
+    "CHANGELOG.md",
+    "docs/*.md",
+    ".env.example",
+    "overrides.example.json"
+  ],
   "scripts": {
     "test": "node --test test/*.test.ts",
     "typecheck": "tsc -p tsconfig.json",

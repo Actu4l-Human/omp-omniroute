@@ -4,6 +4,21 @@ Use a self-hosted OmniRoute gateway as an **extension-registered `omniroute` pro
 
 The compatibility baseline is **OMP 18.18.1** and **OmniRoute v3.8.53**. The inspected `release/v3.8.54` development revision shares the reviewed metadata, pricing, health, and usage contracts; it is not the latest published release in this review. See [source revisions and verification limits](docs/compatibility.md).
 
+Package version: **1.1.0**. <!-- x-release-please-version -->
+
+## GitHub Packages
+
+Releases publish `@actu4l-human/omp-omniroute` to `https://npm.pkg.github.com`, linked to this repository. See [release notes](CHANGELOG.md) and [release setup](docs/development.md#releases-and-github-packages). The package becomes available only after the first successful release workflow; the version above is the source version, not proof of publication.
+
+GitHub requires authentication even for public npm packages. After a release is published, authenticate with your GitHub username and a classic token with `read:packages` (enter the token at the password prompt, not in a command):
+
+```sh
+npm login --scope=@actu4l-human --auth-type=legacy --registry=https://npm.pkg.github.com
+npm install --prefix "$HOME/omp-extensions" --ignore-scripts @actu4l-human/omp-omniroute --registry=https://npm.pkg.github.com
+```
+
+With gateway environment variables configured as below, load `$HOME/omp-extensions/node_modules/@actu4l-human/omp-omniroute/index.ts` with `omp --no-extensions -e`. Use `npm.cmd` on Windows. Do not also install a second copy through automatic directory loading.
+
 ## Install from this folder
 
 Use a working OMP 18.18.1 installation with its required Bun >=1.4.4. Keep `index.ts`, `package.json`, and the complete `src/` directory together. Runtime installation does **not** need `npm ci` or an extension-local `node_modules`.

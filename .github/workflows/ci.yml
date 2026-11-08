@@ -1,0 +1,86 @@
+name: CI
+
+on:
+  pull_request:
+    types: [opened, synchronize, reopened, edited]
+  push:
+    branches: [main]
+  workflow_dispatch:
+  workflow_call:
+    inputs:
+      ref:
+        description: Exact release commit to verify
+        type: string
+        required: false
+        default: ''
+      release-tag:
+        description: Release tag that must match the package version
+        type: string
+        required: false
+        default: ''
+
+permissions:
+  contents: read
+
+jobs:
+  title:
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Require a Conventional Commit PR title
+        env:
+          PR_TITLE: ${{ github.event.pull_request.title }}
+        run: |
+          node --input-type=module <<'NODE'
+          import assert from 'node:assert/strict';
+          assert.match(process.env.PR_TITLE, /^(feat|fix|perf|docs|refactor|test|build|ci|chore|style|revert)(\([^()\r\n]+\))?!?: \S[^\r\n]*$/, 'Use a Conventional Commit title, e.g. feat: add model support');
+          NODE
+
+  verify:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          ref: ${{ inputs.ref || github.sha }}
+          persist-credentials: false
+      - uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6
+        with:
+          node-version: '26.13.0'
+          cache: npm
+      - name: Install pinned package manager and dependencies
+        run: |
+          npm install --global npm@12.2.2
+          npm ci
+      - run: npm test
+      - run: npm run typecheck
+      - run: npm run test:integration
+      - name: Pack and check publishable contents
+        id: pack
+        env:
+          RELEASE_TAG: ${{ inputs.release-tag }}
+        run: |
+          mkdir -p dist
+          npm pack --ignore-scripts --json --pack-destination dist > "$RUNNER_TEMP/pack.json"
+          node --input-type=module <<'NODE'
+          import assert from 'node:assert/strict';
+          import { readFileSync, appendFileSync } from 'node:fs';
+          import { join } from 'node:path';
+          const pack = JSON.parse(readFileSync(join(process.env.RUNNER_TEMP, 'pack.json'), 'utf8'))['@actu4l-human/omp-omniroute'];
+          assert.equal(pack.name, '@actu4l-human/omp-omniroute');
+          assert.match(pack.version, /^\d+\.\d+\.\d+$/);
+          if (process.env.RELEASE_TAG) assert.equal(process.env.RELEASE_TAG, `v${pack.version}`);
+          const allowed = new Set(['package.json', 'index.ts', 'README.md', 'CHANGELOG.md', '.env.example', 'overrides.example.json']);
+          const paths = new Set(pack.files.map(file => file.path));
+          for (const file of paths) assert.ok(allowed.has(file) || /^(src\/[^/]+\.ts|docs\/[^/]+\.md)$/.test(file), `Unexpected package file: ${file}`);
+          for (const file of [...allowed, 'src/extension.ts']) assert.ok(paths.has(file), `Missing package file: ${file}`);
+          appendFileSync(process.env.GITHUB_OUTPUT, `filename=${pack.filename}\n`);
+          NODE
+      - name: Exercise the packed extension with the real OMP CLI
+        run: npm run test:cli -- "dist/${{ steps.pack.outputs.filename }}"
+      - uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6
+        with:
+          name: npm-package
+          path: dist/*.tgz
+          if-no-files-found: error
+          retention-days: 14
