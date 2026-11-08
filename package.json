@@ -1,0 +1,31 @@
+{
+  "name": "omp-omniroute",
+  "version": "1.1.0",
+  "private": true,
+  "type": "module",
+  "description": "A focused dynamic OmniRoute provider extension for Oh My Pi",
+  "scripts": {
+    "test": "node --test test/*.test.ts",
+    "typecheck": "tsc -p tsconfig.json",
+    "test:integration": "bun test ./test/reported-cost.integration.ts ./test/specialty.integration.ts",
+    "test:cli": "bun test/cli-smoke.ts"
+  },
+  "engines": {
+    "node": ">=24"
+  },
+  "devDependencies": {
+    "@oh-my-pi/pi-ai": "18.18.1",
+    "@oh-my-pi/pi-coding-agent": "18.18.1",
+    "@types/node": "26.6.6",
+    "bun": "1.4.4",
+    "typescript": "7.0.2"
+  },
+  "omp": {
+    "extensions": [
+      "./index.ts"
+    ]
+  },
+  "allowScripts": {
+    "bun@1.4.4": true
+  }
+}
