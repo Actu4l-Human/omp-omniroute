@@ -1,5 +1,12 @@
 # Changelog
 
+## [1.3.0](https://github.com/Actu4l-Human/omp-omniroute/compare/v1.2.1...v1.3.0) (2026-11-08)
+
+
+### Features
+
+* added catalog diagnostics and safer model refresh handling ([6970a5c](https://github.com/Actu4l-Human/omp-omniroute/commit/6970a5cf1d5f05f9a9f8fa137e496a51e2d01c5c))
+
 ## [1.2.1](https://github.com/Actu4l-Human/omp-omniroute/compare/v1.2.0...v1.2.1) (2026-11-08)
 
 
