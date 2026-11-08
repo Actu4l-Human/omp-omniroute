@@ -56,7 +56,8 @@ jobs:
           path: dist
       - uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6
         with:
-          node-version: '26.13.0'
+          node-version: '26'
+          check-latest: true
           registry-url: https://npm.pkg.github.com
           scope: '@actu4l-human'
           package-manager-cache: false

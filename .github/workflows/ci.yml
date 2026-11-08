@@ -27,6 +27,11 @@ jobs:
     if: github.event_name == 'pull_request'
     runs-on: ubuntu-latest
     steps:
+      - uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6
+        with:
+          node-version: '26'
+          check-latest: true
+          package-manager-cache: false
       - name: Require a Conventional Commit PR title
         shell: bash
         env:
@@ -45,17 +50,12 @@ jobs:
       matrix:
         include:
           - os: ubuntu-latest
-            node: '26.13.0'
+            node: '26'
             shell: bash
             npm: npm
             canonical: true
-          - os: ubuntu-latest
-            node: '24'
-            shell: bash
-            npm: npm
-            canonical: false
           - os: windows-latest
-            node: '24'
+            node: '26'
             shell: pwsh
             npm: npm.cmd
             canonical: false
@@ -71,6 +71,7 @@ jobs:
       - uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6
         with:
           node-version: ${{ matrix.node }}
+          check-latest: true
           cache: npm
       - name: Install pinned package manager
         run: ${{ matrix.npm }} install --global npm@12.2.2
