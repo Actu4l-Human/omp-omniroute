@@ -1,5 +1,12 @@
 # Changelog
 
+## [1.4.0](https://github.com/Actu4l-Human/omp-omniroute/compare/v1.3.0...v1.4.0) (2026-11-08)
+
+
+### Features
+
+* added override diagnostics and model update status ([9a6e5c3](https://github.com/Actu4l-Human/omp-omniroute/commit/9a6e5c393c325650526618c2bdfbc05d9af77035))
+
 ## [1.3.0](https://github.com/Actu4l-Human/omp-omniroute/compare/v1.2.1...v1.3.0) (2026-11-08)
 
 
