@@ -1,0 +1,52 @@
+import type {UsageProvider,UsageReport,UsageLimit,UsageAmount} from '@oh-my-pi/pi-ai';
+import {PROVIDER,type Config} from './catalog.ts';
+import {getGatewayJson,GatewayError,asRecord,safeLabel} from './gateway.ts';
+const numeric=(v:unknown):number|undefined=>typeof v==='number' && Number.isFinite(v) && v>=0?v:typeof v==='string' && /^\d+(\.\d+)?$/.test(v) && Number.isFinite(Number(v))?Number(v):undefined;
+const reset=(v:unknown):number|undefined=>typeof v==='string' && /^\d{4}-\d\d-\d\dT/.test(v) && Number.isFinite(Date.parse(v))?Date.parse(v):undefined;
+function status(amount:UsageAmount):UsageLimit['status']{
+ const ratio=amount.usedFraction ?? (amount.used!==undefined && amount.limit!==undefined && amount.limit>0?amount.used/amount.limit:undefined);
+ if(ratio!==undefined)return ratio>=1?'exhausted':ratio>=.8?'warning':'ok';
+ return amount.used!==undefined && amount.limit===0?'exhausted':'unknown';
+}
+function mapUsage(payload:unknown,key:string|undefined):UsageReport {
+ const labelText=(value:unknown,fallback:string)=>safeLabel(typeof value==='string' && key?value.split(key).join('[redacted]'):value,fallback);
+ const root=asRecord(payload);if(root?.allowed===false)throw new Error('OmniRoute usage request was refused; check the key and allowUsageCommand permission');
+ if(root?.allowed!==true)throw new Error('OmniRoute usage response has an invalid shape');
+ const report:UsageReport={provider:PROVIDER,fetchedAt:Date.now(),limits:[],notes:['Provider quotas are raw cached upstream snapshots, not cutoff-adjusted usable allowance. Cache observation time is not supplied.']};
+ const personal=asRecord(root.personal);
+ if(personal)for(const period of ['daily','weekly']){
+  const used=numeric(personal[period+'SpentUsd']),limit=numeric(personal[period+'LimitUsd']),resetsAt=reset(personal[period+'ResetAtIso']);
+  if(used===undefined && limit===undefined)continue;
+  const amount:UsageAmount={unit:'usd',...(used!==undefined?{used}:{}),...(limit!==undefined?{limit}:{})};
+  report.limits.push({id:`personal:${period}`,label:`Personal ${period}`,scope:{provider:PROVIDER,windowId:period},window:{id:period,label:period,...(resetsAt!==undefined?{resetsAt}:{})},amount,status:status(amount)});
+ }
+ const snapshots=Array.isArray(root.providers)&&root.providers.length?root.providers:root.provider?[root.provider]:[];
+ const seen=new Set<string>();
+ for(const [i,candidate] of snapshots.entries()){
+  const snapshot=asRecord(candidate);const quotas=asRecord(snapshot?.quotas);if(!snapshot || !quotas)continue;
+  const provider=labelText(snapshot.provider,'Provider');const account=labelText(snapshot.connectionId,`snapshot-${i+1}`);
+  if(seen.has(account))continue;seen.add(account);
+  for(const [name,value] of Object.entries(quotas)){
+   const q=asRecord(value);if(!q)continue;const label=labelText(name,'Quota');
+   const used=numeric(q.used),total=numeric(q.total),usedPercent=numeric(q.usedPercentage),remainingPercent=numeric(q.remainingPercentage);
+   const amount:UsageAmount={unit:'unknown'};
+   if(usedPercent!==undefined && usedPercent<=100){amount.unit='percent';amount.used=usedPercent;amount.limit=100;amount.usedFraction=usedPercent/100;}
+   else if(remainingPercent!==undefined && remainingPercent<=100){amount.unit='percent';amount.remaining=remainingPercent;amount.limit=100;amount.remainingFraction=remainingPercent/100;amount.usedFraction=1-remainingPercent/100;}
+   else if(used!==undefined && total!==undefined && total>0){amount.used=used;amount.limit=total;amount.usedFraction=used/total;}
+   // A bare used/remaining value has no reliable unit; do not guess a percentage.
+   const resetsAt=reset(q.resetAt);
+   report.limits.push({id:`provider:${account}:${label}`,label:`${provider} ${label} (raw)`,scope:{provider:PROVIDER,accountId:account,windowId:label},window:{id:label,label,...(resetsAt!==undefined?{resetsAt}:{})},amount,status:status(amount)});
+  }
+ }
+ if(!report.limits.length)report.notes!.push('No usable usage data is available; this does not mean zero usage.');
+ return report;
+}
+export async function fetchUsageSnapshot(config:Config,key:string|undefined,fetchImpl:typeof fetch=fetch,signal?:AbortSignal):Promise<UsageReport>{
+ try {return mapUsage((await getGatewayJson(config,'usage',key,fetchImpl,signal)).payload,key);}
+ catch(error){if(error instanceof GatewayError && error.status===403)throw new Error('OmniRoute usage requires allowUsageCommand for this API key (HTTP 403); ask your gateway administrator to enable it if desired');if(error instanceof GatewayError && error.status===401)throw new Error('OmniRoute usage authentication failed (HTTP 401); check your API key');throw error;}
+}
+export function createUsageProvider(config:Config,fetchImpl?:typeof fetch):UsageProvider{
+ return {id:PROVIDER,cacheVersion:1,retainLastGoodOnFailure:false,validatesCredentials:false,
+ supports:params=>params.provider===PROVIDER && params.credential.type==='api_key',
+ fetchUsage:(params,ctx)=>fetchUsageSnapshot(config,params.credential.apiKey,fetchImpl ?? ctx.fetch as typeof fetch,params.signal)};
+}

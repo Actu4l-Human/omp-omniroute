@@ -1,0 +1,16 @@
+{
+  "replace-with-exact-gateway-model-id": {
+    "name": "My locally corrected model",
+    "api": "openai-completions",
+    "context_length": 32768,
+    "max_output_tokens": 4096,
+    "capabilities": {
+      "reasoning": true,
+      "tool_calling": true,
+      "vision": false,
+      "effort_tiers": ["low", "medium", "high"]
+    },
+    "input_modalities": ["text"],
+    "pricingStatus": "unknown"
+  }
+}
