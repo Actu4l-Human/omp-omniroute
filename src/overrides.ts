@@ -12,11 +12,23 @@ export interface ModelOverride {
   pricingStatus?: 'estimated' | 'unknown' | 'variable';
 }
 export type ModelOverrides = Record<string, ModelOverride>;
+export interface OverrideDiagnostics {matched:number;unmatched:{id:string;suggestedId?:string}[]}
+export function auditOverrides(overrides:ModelOverrides,ids:Iterable<string>):OverrideDiagnostics {
+  const available=ids instanceof Set?ids:new Set(ids);
+  const diagnostics:OverrideDiagnostics={matched:0,unmatched:[]};
+  for(const id of Object.keys(overrides)) {
+    if(available.has(id)){diagnostics.matched++;continue;}
+    const stripped=id.startsWith('omniroute/')?id.slice('omniroute/'.length):undefined;
+    diagnostics.unmatched.push({id,...(stripped!==undefined&&available.has(stripped)?{suggestedId:stripped}:{})});
+  }
+  return diagnostics;
+}
 const MAX_BYTES=256*1024;
 const forbidden=new Set(['__proto__','prototype','constructor']);
 const fields=new Set(['name','type','api','context_length','max_output_tokens','capabilities','input_modalities','pricing','pricingStatus']);
 const apis={'openai-completions':'chat','openai-embeddings':'embedding','openai-images':'image'} as const;
-function fail():never {throw new Error('Invalid model overrides: unsupported field or value');}
+class OverrideError extends Error {}
+function fail():never {throw new OverrideError('Invalid model overrides in OMNIROUTE_OVERRIDES_FILE: unsupported field or value; use only supported override fields and values.');}
 function record(value:unknown): Record<string,unknown> {
   if(!value || typeof value!=='object' || Array.isArray(value) || ![Object.prototype,null].includes(Object.getPrototypeOf(value))) fail();
   for(const key of Object.keys(value)) if(forbidden.has(key)) fail();
@@ -58,20 +70,26 @@ function validate(value:unknown):ModelOverrides {
 /** A missing path disables overrides; an explicitly configured unreadable file fails closed. */
 export async function loadOverrides(path?:string):Promise<ModelOverrides> {
   if(path===undefined||path==='') return {};
-  const handle=await open(path,'r');
   try {
-    const stat=await handle.stat();
-    if(!stat.isFile()||stat.size>MAX_BYTES) throw new Error('Model overrides file must be a regular file of at most 256 KiB');
-    const bytes=Buffer.alloc(MAX_BYTES+1); let total=0;
-    while(total<bytes.length) {
-      const {bytesRead}=await handle.read(bytes,total,bytes.length-total,null);
-      if(bytesRead===0) break; total+=bytesRead;
-    }
-    if(total>MAX_BYTES) throw new Error('Model overrides file exceeds 256 KiB');
-    let parsed:unknown;
-    try {parsed=JSON.parse(bytes.subarray(0,total).toString('utf8'));} catch {throw new Error('Model overrides file is not valid JSON');}
-    return validate(parsed);
-  } finally {await handle.close();}
+    const handle=await open(path,'r');
+    try {
+      const stat=await handle.stat();
+      if(!stat.isFile()||stat.size>MAX_BYTES) throw new OverrideError('Set OMNIROUTE_OVERRIDES_FILE to a regular model overrides file of at most 256 KiB.');
+      const bytes=Buffer.alloc(MAX_BYTES+1); let total=0;
+      while(total<bytes.length) {
+        const {bytesRead}=await handle.read(bytes,total,bytes.length-total,null);
+        if(bytesRead===0) break; total+=bytesRead;
+      }
+      if(total>MAX_BYTES) throw new OverrideError('Model overrides file exceeds 256 KiB; reduce the file configured by OMNIROUTE_OVERRIDES_FILE.');
+      let parsed:unknown;
+      try {parsed=JSON.parse(bytes.subarray(0,total).toString('utf8'));} catch {throw new OverrideError('Model overrides file is not valid JSON; correct the JSON in OMNIROUTE_OVERRIDES_FILE.');}
+      return validate(parsed);
+    } finally {await handle.close();}
+  } catch(error) {
+    if(error instanceof OverrideError) throw error;
+    if(error instanceof Error && 'code' in error && error.code==='ENOENT') throw new OverrideError('Model overrides file not found; set OMNIROUTE_OVERRIDES_FILE to an existing file (relative paths use the working directory), or unset it.');
+    throw new OverrideError('Cannot read model overrides; check that OMNIROUTE_OVERRIDES_FILE names a readable regular file and that file permissions allow access, or unset it.');
+  }
 }
 export function applyOverridesToRow(row:Record<string,unknown>,overrides:ModelOverrides):{effective:Record<string,unknown>;applied?:ModelOverride} {
   const id=row.id;

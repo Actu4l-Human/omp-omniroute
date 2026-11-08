@@ -16,9 +16,9 @@ src/
   catalog.ts                Configuration, catalog fetch/filter/map and metadata
   changes.ts                Meaningful catalog diffs
   cost.ts                   Reported USD parsing and additive accounting
-  doctor.ts                 Read-only endpoint/catalog/version/health diagnostics
+  doctor.ts                 Local override and read-only gateway diagnostics
   gateway.ts                Bounded authenticated same-origin GETs and URL derivation
-  overrides.ts              Bounded file loading and strict override validation
+  overrides.ts              Bounded file loading, strict validation and ID auditing
   reported-cost.ts          Scoped chat wrapper delegating to OMP's native adapter
   telemetry.ts              Request-control headers and sanitized request metadata
   usage.ts                  Optional key-scoped usage fetching and normalization
@@ -65,11 +65,11 @@ npm 12 initially blocked Bun's required installer. The manifest now contains a v
 
 ## What the checks exercise
 
-- `test`: Node unit/lifecycle suites for mapping, rejection/fallback diagnostics, live-selection refresh races, deferred idle rebinding and cancellation, overrides, costs, telemetry, gateway bounds, usage fractions/overages, and doctor coverage. Missing deployment-version headers are healthy; malformed/empty ones and empty health observations warn.
+- `test`: Node unit/lifecycle suites for mapping, rejection/fallback and unmatched-override diagnostics, live-selection refresh races, deferred idle rebinding, selected-model failures/removal/recovery, overrides, costs, telemetry, gateway bounds, usage fractions/overages, and doctor coverage. Override-file validation remains available during catalog outages; cancellation cleanup cannot hide HTTP/size errors.
 - `typecheck`: strict checking of the root loader and runtime modules against the pinned public SDK. Test files are not included in this compiler target.
 - `test:integration`: OMP's real chat adapter with controlled SSE/fetch responses, zero/nonzero/absent reported cost, controls and terminal events, plus a registered custom API under a one-request provider cap with one dispatch. Specialty cases call exported `embed` and `generateImage` over authenticated loopback HTTP, verifying an indexed vector/usage and exact PNG data.
 - `test:cli`: starts the actual package CLI with package-local Bun (or `OMNIROUTE_SMOKE_CLI`) against an authenticated loopback fixture. The staged profile contains `agent/extensions/omniroute/{index.ts,package.json,src/}` and no extension-local dependencies. Its first command uses automatic discovery before a catalog cache exists. Later commands exercise native personal usage fractions/remaining allowance, explicit loading, native/scoped chat, real built-in `read` tool loops with split streamed arguments, request controls/overrides, and cached custom-API fallback during discovery outage.
-- CI packs an allowlisted npm tarball, then passes it to `test:cli`. With a tarball argument the fixture extracts the published layout instead of copying the working tree, so missing runtime files fail the actual discovery/tool scenarios. Local source-folder checks remain available without the argument.
+- CI runs the checks on Ubuntu with Node 26.13.0, Ubuntu with Node 24, and Windows with Node 24. Windows uses `npm.cmd`; package validation uses explicit Bash on each runner. Every lane packs an allowlisted tarball and passes it to `test:cli`, so missing runtime files fail actual discovery/tool scenarios. Only Ubuntu/Node 26.13.0 uploads the canonical `npm-package` artifact, and publication waits for every verification lane. Local source-folder checks remain available without a tarball argument.
 
 The CLI receives only fixture credentials, uses a temporary working directory/profile, and bounds each subprocess to 45 seconds. Both native and scoped tool scenarios require exactly two chat requests: the tool call, then the real file result before final text. Specialty requests have five-second abort signals. Teardown removes the temporary profile and stops loopback servers.
 

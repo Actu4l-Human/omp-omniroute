@@ -31,6 +31,13 @@ export async function installOmniRoute(pi: ExtensionAPI, env: Record<string,stri
   let pending: Promise<void>|undefined;
   let pendingGeneration=0;let sessionGeneration=0;
   let cancelIdleRebind:(()=>void)|undefined;
+  let modelUpdate:{id:string;state:'pending'|'missing'|'rejected'|'failed'}|undefined;
+  const modelUpdateMessages={
+    pending:'Selected-model metadata is waiting for the session to become idle.',
+    missing:'The selected OmniRoute model is absent from the latest discovered catalog. It remains selected; choose an available model or check filters and refresh.',
+    rejected:'Selected-model metadata was not applied because OMP could not resolve model authentication. Check authentication and run /omniroute-refresh while idle.',
+    failed:'Selected-model metadata could not be applied. The catalog was refreshed; retry /omniroute-refresh while idle and check OMP diagnostics if this persists.',
+  } as const;
   let timer: ReturnType<ExtensionContext['setInterval']>|undefined;
   let timerContext: ExtensionContext|undefined;
   const registration: ProviderConfig={
@@ -60,12 +67,34 @@ export async function installOmniRoute(pi: ExtensionAPI, env: Record<string,stri
   }
   pi.registerProvider(PROVIDER,registration);
 
-  const summary=()=>{
+  const currentModelUpdate=(ctx:ExtensionContext)=>{
+    const selected=ctx.models.current();
+    if(selected?.provider!==PROVIDER || selected.id!==modelUpdate?.id)modelUpdate=undefined;
+    return modelUpdate;
+  };
+  const hasWarning=(ctx:ExtensionContext)=>{
+    const update=currentModelUpdate(ctx);
+    return !!lastError || catalog.diagnostics.overrides.unmatched.length>0 || (!!update && update.state!=='pending');
+  };
+  const summary=(ctx:ExtensionContext)=>{
     const skipped=Object.entries(catalog.diagnostics.skippedByReason).filter(([,count])=>count>0).map(([reason,count])=>`${reason}: ${count}`).join(', ');
     const fallbacks=Object.entries(catalog.diagnostics.fallbacks).filter(([,counts])=>counts.contextWindow || counts.maxTokens)
       .map(([kind,counts])=>`${kind}: ${counts.contextWindow} context, ${counts.maxTokens} output`).join('; ');
-    return `${catalog.models.length} model(s), ${catalog.skipped} skipped${skipped?` (${skipped})`:''}. Last success: ${lastSuccess?new Date(lastSuccess).toISOString():'not fetched in this session'}. ${lastError?`Refresh failed: ${lastError}. Retaining last successful catalog.`:'Catalog costs are estimates; unknown/variable costs are not free.'}${fallbacks?` Fallback limits (${fallbacks}). Use /omniroute-model <id> and exact-ID overrides to supply verified limits.`:''}`;
+    const unmatched=catalog.diagnostics.overrides.unmatched.length;
+    const update=currentModelUpdate(ctx);
+    return `${catalog.models.length} model(s), ${catalog.skipped} skipped${skipped?` (${skipped})`:''}. Last success: ${lastSuccess?new Date(lastSuccess).toISOString():'not fetched in this session'}. ${lastError?`Refresh failed: ${lastError}. Retaining last successful catalog.`:'Catalog costs are estimates; unknown/variable costs are not free.'}${fallbacks?` Fallback limits (${fallbacks}). Use /omniroute-model <id> and exact-ID overrides to supply verified limits.`:''}${unmatched?` ${unmatched} override key(s) matched no gateway model. Use /omniroute-doctor for exact IDs and suggestions.`:''}${update?` ${modelUpdateMessages[update.state]}`:''}`;
   };
+  function updateStatus(ctx:ExtensionContext):void {
+    const update=currentModelUpdate(ctx);
+    const unmatched=catalog.diagnostics.overrides.unmatched.length;
+    if(ctx.hasUI)ctx.ui.setStatus('omniroute',lastError?'OmniRoute: catalog stale':`OmniRoute: ${catalog.models.length} models${unmatched?`; ${unmatched} unmatched overrides`:''}${update?`; selected model ${update.state}`:''}`);
+  }
+  function setModelUpdate(ctx:ExtensionContext,id:string,state:NonNullable<typeof modelUpdate>['state']):void {
+    const previous=currentModelUpdate(ctx);
+    modelUpdate={id,state};
+    updateStatus(ctx);
+    if(state!=='pending' && (previous?.id!==id || previous.state!==state))show(ctx,modelUpdateMessages[state],'warning');
+  }
   function clearIdleRebind():void {
     cancelIdleRebind?.();
     cancelIdleRebind=undefined;
@@ -74,10 +103,12 @@ export async function installOmniRoute(pi: ExtensionAPI, env: Record<string,stri
     if(generation!==sessionGeneration || lastError)return;
     // Command contexts snapshot ctx.model; the query facade reads the live selection.
     const selected=ctx.models.current();
-    if(selected?.provider!==PROVIDER || selected.id!==id)return;
+    if(selected?.provider!==PROVIDER || selected.id!==id){updateStatus(ctx);return;}
     const current=ctx.modelRegistry.find(PROVIDER,id);
-    if(!current || isDeepStrictEqual(current,selected))return;
+    if(!catalog.metadata.has(id) || !current){setModelUpdate(ctx,id,'missing');return;}
+    if(isDeepStrictEqual(current,selected)){modelUpdate=undefined;updateStatus(ctx);return;}
     if(!ctx.isIdle()) {
+      setModelUpdate(ctx,id,'pending');
       // agent_end can precede the host becoming idle. A managed timer also covers
       // discovery completing during that unwind, without another catalog request.
       const timer=ctx.setTimeout(()=>{
@@ -87,7 +118,14 @@ export async function installOmniRoute(pi: ExtensionAPI, env: Record<string,stri
       cancelIdleRebind=()=>ctx.clearTimer(timer);
       return;
     }
-    await pi.setModel(current);
+    let state:'rejected'|'failed'|undefined;
+    try {if(!await pi.setModel(current))state='rejected';}
+    catch {state='failed';}
+    if(generation!==sessionGeneration)return;
+    const latest=ctx.models.current();
+    if(latest?.provider!==PROVIDER || latest.id!==id){updateStatus(ctx);return;}
+    if(state)setModelUpdate(ctx,id,state);
+    else {modelUpdate=undefined;updateStatus(ctx);}
   }
   async function refresh(ctx: ExtensionContext): Promise<void> {
     const generation=sessionGeneration;
@@ -108,7 +146,7 @@ export async function installOmniRoute(pi: ExtensionAPI, env: Record<string,stri
         if(!lastError && selected?.provider===PROVIDER)await rebindSelected(ctx,selected.id,generation);
       } catch(error) {lastError=error instanceof Error?error.message:'OmniRoute refresh failed';}
       if(generation!==sessionGeneration)return;
-      if(lastError)clearIdleRebind();
+      if(lastError){clearIdleRebind();modelUpdate=undefined;}
       if(!lastError) {
         const changes=diffCatalog(alertBaseline,catalog);alertBaseline=catalog;
         if(changes) {
@@ -116,12 +154,12 @@ export async function installOmniRoute(pi: ExtensionAPI, env: Record<string,stri
           if(config.catalogAlerts)show(ctx,`OmniRoute catalog changed: ${changes.added.length} added, ${changes.removed.length} removed, ${changes.changed.length} changed. Use /omniroute-changes for details.`);
         }
       }
-      if (ctx.hasUI) ctx.ui.setStatus('omniroute',lastError?'OmniRoute: catalog stale':`OmniRoute: ${catalog.models.length} models`);
+      updateStatus(ctx);
     })();
     try {await pending;} finally {pending=undefined;}
   }
   pi.on('session_start',async(_event,ctx)=>{
-    sessionGeneration++;clearIdleRebind();
+    sessionGeneration++;clearIdleRebind();modelUpdate=undefined;
     if (timer!==undefined && timerContext) timerContext.clearTimer(timer);
     timerContext=ctx;
     sessionId=ctx.sessionManager?.getSessionId?.()??randomUUID();
@@ -129,23 +167,23 @@ export async function installOmniRoute(pi: ExtensionAPI, env: Record<string,stri
     // Force an initial scoped refresh: OMP's default persisted TTL is 24 hours,
     // which is too stale for a frequently changed gateway roster.
     await refresh(ctx);
-    if (lastError) ctx.ui.notify(summary(),'warning');
+    if(hasWarning(ctx))show(ctx,summary(ctx),'warning');
   });
   pi.on('session_shutdown',()=>{
-    sessionGeneration++;clearIdleRebind();
+    sessionGeneration++;clearIdleRebind();modelUpdate=undefined;
     if (timer!==undefined && timerContext) timerContext.clearTimer(timer);
     timer=undefined;timerContext=undefined;
   });
   pi.registerCommand('omniroute-refresh',{description:'Refresh only the OmniRoute model catalog now',handler:async(_args,ctx)=>{
-    await refresh(ctx);ctx.ui.notify(summary(),lastError?'warning':'info');
+    await refresh(ctx);show(ctx,summary(ctx),hasWarning(ctx)?'warning':'info');
   }});
   pi.registerCommand('omniroute-status',{description:'Show OmniRoute discovery health and pricing caveats',handler:async(_args,ctx)=>{
-    ctx.ui.notify(summary(),lastError?'warning':'info');
+    updateStatus(ctx);show(ctx,summary(ctx),hasWarning(ctx)?'warning':'info');
   }});
   pi.registerCommand('omniroute-usage',{description:'Read key-scoped gateway usage and quota data',handler:async(_args,ctx)=>{
     try{show(ctx,await fetchUsageSnapshot(config,env.OMNIROUTE_API_KEY,fetchImpl));}catch(error){show(ctx,error instanceof Error?error.message:'Usage lookup failed','warning');}
   }});
-  pi.registerCommand('omniroute-doctor',{description:'Read-only authenticated catalog, version and health checks',handler:async(_args,ctx)=>{
+  pi.registerCommand('omniroute-doctor',{description:'Validate local overrides and read-only authenticated catalog, version and health checks',handler:async(_args,ctx)=>{
     const report=await runDoctor(config,env.OMNIROUTE_API_KEY,fetchImpl);
     show(ctx,report,report.checks.some(c=>c.status==='error')?'error':report.checks.some(c=>c.status==='warning')?'warning':'info');
   }});

@@ -1,6 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { readConfig, mapCatalog, fetchCatalog } from '../src/catalog.ts';
+import { setImmediate as nextTurn } from 'node:timers/promises';
 
 const env = { OMNIROUTE_BASE_URL: 'https://router.example.com/v1/', OMNIROUTE_API_KEY: 'test-key' };
 const config = () => readConfig(env);
@@ -183,4 +184,45 @@ test('native chat identifier is retained when all adapter features are disabled'
   const opts=readConfig({...env,OMNIROUTE_INSPECT_REQUESTS:'false'});
   assert.equal(mapCatalog({data:[chat()]},opts).models[0].api,'openai-completions');
   opts.stickySessions=true;assert.equal(mapCatalog({data:[chat()]},opts).models[0].api,'omniroute-chat');
+});
+test('override diagnostics audit raw IDs even when mapping filters reject every model',()=>{
+  const rows=[{id:'vendor/a'},{id:'vendor/a'},{id:'omniroute/vendor/b'},{id:'vendor/b'},{id:'vendor/no-tools',capabilities:{tool_calling:false}}];
+  const overrides={'vendor/a':{name:'Filtered'},'omniroute/vendor/a':{name:'Do not apply'},'omniroute/vendor/b':{},'vendor/no-tools':{},missing:{}};
+  const expected={matched:3,unmatched:[{id:'omniroute/vendor/a',suggestedId:'vendor/a'},{id:'missing'}]};
+  const filtered=mapCatalog({data:rows},{...config(),exclude:['*']},overrides);
+  assert.equal(filtered.models.length,0);assert.deepEqual(filtered.diagnostics.overrides,expected);
+  const mapped=mapCatalog({data:rows},config(),overrides);
+  assert.deepEqual(mapped.diagnostics.overrides,expected);
+  assert.equal(mapped.models.find(row=>row.id==='vendor/a')?.name,'Filtered [price unknown]');
+  assert.equal(mapped.models.some(row=>row.id==='omniroute/vendor/a'),false);
+  assert.deepEqual(mapCatalog({data:rows},config()).diagnostics.overrides,{matched:0,unmatched:[]});
+});
+test('catalog failures retain their original errors when body or reader cancellation rejects',async()=>{
+  const max=5*1024*1024;
+  for(const kind of ['http','length','chunks'] as const){
+    let cancelled=0;
+    const body=new ReadableStream<Uint8Array>({
+      start(controller){controller.enqueue(new Uint8Array(kind==='chunks'?max+1:1));},
+      cancel(){cancelled++;return Promise.reject(new Error('private cleanup failure'));},
+    });
+    const response=new Response(body,kind==='http'?{status:401}:kind==='length'?{headers:{'content-length':String(max+1)}}:{});
+    const message=kind==='http'?'OmniRoute models request failed (HTTP 401)':'OmniRoute models response is too large';
+    await assert.rejects(fetchCatalog(config(),'private-key',async()=>response),{message});
+    assert.equal(cancelled,1);
+  }
+});
+test('catalog rejection does not wait for nonsettling cleanup',async()=>{
+  for(const kind of ['http','length','chunks'] as const){
+    const body=new ReadableStream<Uint8Array>({
+      start(controller){controller.enqueue(new Uint8Array(kind==='chunks'?5*1024*1024+1:1));},
+      cancel(){return Promise.withResolvers<void>().promise;},
+    });
+    const response=new Response(body,kind==='http'?{status:503}:kind==='length'?{headers:{'content-length':'99999999'}}:{});
+    let failure:unknown;
+    void fetchCatalog(config(),'private-key',async()=>response).catch(error=>{failure=error;});
+    // All fixture reads settle immediately; drain their microtasks without awaiting cleanup.
+    await nextTurn();
+    assert.ok(failure instanceof Error);
+    assert.equal(failure.message,kind==='http'?'OmniRoute models request failed (HTTP 503)':'OmniRoute models response is too large');
+  }
 });

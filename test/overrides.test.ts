@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import { mkdtemp, writeFile, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { loadOverrides, applyOverrides, applyOverridesToRow } from '../src/overrides.ts';
+import { loadOverrides, applyOverrides, applyOverridesToRow, auditOverrides } from '../src/overrides.ts';
 async function withFile(contents:string, run:(path:string)=>Promise<void>) {
   const dir=await mkdtemp(join(tmpdir(),'omp-overrides-'));
   try { const path=join(dir,'overrides.json'); await writeFile(path,contents); await run(path); }
@@ -38,4 +38,30 @@ test('rejects oversized files and malformed JSON',async()=>{
 test('supported native API override sets matching type and rejects contradictions',async()=>{
   await withFile('{"x":{"api":"openai-images"}}',async path=>{const result=applyOverridesToRow({id:'x'},await loadOverrides(path)); assert.equal(result.effective.type,'image');});
   await withFile('{"x":{"api":"openai-images","type":"embedding"}}',async path=>{await assert.rejects(loadOverrides(path),/override/i);});
+});
+test('audits exact unique override keys and only suggests existing stripped provider IDs',()=>{
+  const overrides={'vendor/a':{},'omniroute/vendor/a':{},'omniroute/vendor/b':{},'omniroute/missing':{},'Vendor/a':{}};
+  const before=structuredClone(overrides);
+  assert.deepEqual(auditOverrides(overrides,['vendor/a','vendor/a','vendor/b','omniroute/vendor/b']),{
+    matched:2,unmatched:[{id:'omniroute/vendor/a',suggestedId:'vendor/a'},{id:'omniroute/missing'},{id:'Vendor/a'}],
+  });
+  assert.deepEqual(overrides,before);
+  assert.deepEqual(auditOverrides({},['vendor/a']),{matched:0,unmatched:[]});
+});
+test('loader errors identify the setting and remedy without exposing paths or invalid contents',async()=>{
+  const dir=await mkdtemp(join(tmpdir(),'private-overrides-'));
+  try {
+    const path=join(dir,'private-file.json');
+    for(const [contents,expected] of [[undefined,/not found/i],['{"private-model":',/valid JSON/i],['{"private-model":{"private-field":"private-value"}}',/unsupported field or value/i],[' '.repeat(262145),/256 KiB/]] as const){
+      if(contents!==undefined)await writeFile(path,contents);
+      await assert.rejects(loadOverrides(path),(error:Error)=>{
+        assert.match(error.message,/OMNIROUTE_OVERRIDES_FILE/);assert.match(error.message,expected);
+        for(const privateText of [dir,path,'private-model','private-field','private-value'])assert.ok(!error.message.includes(privateText));
+        return true;
+      });
+    }
+    await assert.rejects(loadOverrides(dir),(error:Error)=>{
+      assert.match(error.message,/OMNIROUTE_OVERRIDES_FILE/);assert.ok(!error.message.includes(dir));return true;
+    });
+  } finally {await rm(dir,{recursive:true,force:true});}
 });

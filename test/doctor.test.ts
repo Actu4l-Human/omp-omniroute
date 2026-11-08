@@ -1,5 +1,6 @@
 import {test} from 'node:test';import assert from 'node:assert/strict';
 import {readConfig} from '../src/catalog.ts';import {runDoctor} from '../src/doctor.ts';
+import {mkdtemp,writeFile,rm} from 'node:fs/promises';import {tmpdir} from 'node:os';import {join} from 'node:path';
 const config=readConfig({OMNIROUTE_BASE_URL:'https://example.test/v1'});
 test('doctor only GETs models and health, exposes sanitized checks and version',async()=>{
  const urls:string[]=[];const r=await runDoctor(config,'secret',(async(url,init)=>{urls.push(String(url));assert.equal(init?.method,'GET');return String(url).endsWith('/health')?Response.json({data:[{id:'a',state:'ok'},{id:'b',state:'cooling'}]}):Response.json({data:[{id:'a'}]},{headers:{'x-omniroute-version':'3.8.54'}});}) as typeof fetch);
@@ -57,4 +58,56 @@ test('empty health observations warn even when the catalog is empty',async()=>{
   assert.deepEqual(r.health,{total:0,states:{},coverage:{catalog:count,matched:0,unobserved:count,healthOnly:0}});
   assert.equal(r.checks.find(c=>c.id==='health')?.status,'warning');
  }
+});
+test('doctor leaves override checks absent when no file is configured',async()=>{
+ const r=await runDoctor(config,'secret',(async()=>Response.json({data:[]})) as typeof fetch);
+ assert.equal(r.overrides,undefined);assert.ok(!r.checks.some(c=>c.id.startsWith('overrides')));
+});
+test('doctor validates overrides independently and continues network checks after sanitized failures',async()=>{
+ const dir=await mkdtemp(join(tmpdir(),'private-doctor-'));
+ try{
+  const path=join(dir,'private-overrides.json');
+  for(const [contents,expected] of [[undefined,/not found/i],['{"private-model":',/valid JSON/i],['{"private-model":{"private-field":"private-value"}}',/unsupported field or value/i],[' '.repeat(262145),/256 KiB/]] as const){
+   if(contents!==undefined)await writeFile(path,contents);
+   const urls:string[]=[];
+   const r=await runDoctor({...config,overridesFile:path},'private-key',(async(url)=>{urls.push(String(url));return Response.json({data:[{id:'a',state:'ok'}]});}) as typeof fetch);
+   const check=r.checks.find(c=>c.id==='overrides-file')!;
+   assert.equal(check.status,'error');assert.match(check.message,/OMNIROUTE_OVERRIDES_FILE/);assert.match(check.message,expected);
+   assert.deepEqual(urls,['https://example.test/v1/models','https://example.test/v1/models/health']);
+   assert.equal(r.checks.find(c=>c.id==='models')?.status,'ok');assert.equal(r.checks.find(c=>c.id==='health')?.status,'ok');assert.equal(r.overrides,undefined);
+   for(const privateText of [dir,path,'private-key','private-model','private-field','private-value'])assert.ok(!JSON.stringify(r).includes(privateText));
+  }
+  const unreadable=await runDoctor({...config,overridesFile:dir},'secret',(async()=>Response.json({data:[]})) as typeof fetch);
+  assert.equal(unreadable.checks.find(c=>c.id==='overrides-file')?.status,'error');assert.ok(!JSON.stringify(unreadable).includes(dir));
+ }finally{await rm(dir,{recursive:true,force:true});}
+});
+test('doctor audits exact raw override IDs independently of filters and never rewrites qualified keys',async()=>{
+ const dir=await mkdtemp(join(tmpdir(),'omp-doctor-'));
+ try{
+  const path=join(dir,'overrides.json');
+  await writeFile(path,JSON.stringify({'vendor/a':{},'omniroute/vendor/a':{},'omniroute/vendor/b':{},missing:{}}));
+  const r=await runDoctor({...config,overridesFile:path,include:['not-listed'],exclude:['*']},'secret',(async()=>Response.json({data:[{id:'vendor/a',state:'ok'},{id:'vendor/b',state:'ok'},{id:'omniroute/vendor/b',state:'ok'}]})) as typeof fetch);
+  assert.equal(r.checks.find(c=>c.id==='overrides-file')?.status,'ok');
+  assert.deepEqual(r.overrides,{matched:2,unmatched:[{id:'omniroute/vendor/a',suggestedId:'vendor/a'},{id:'missing'}]});
+  const check=r.checks.find(c=>c.id==='overrides-match')!;
+  assert.equal(check.status,'warning');
+  await writeFile(path,JSON.stringify({'vendor/a':{}}));
+  const matched=await runDoctor({...config,overridesFile:path},'secret',(async()=>Response.json({data:[{id:'vendor/a',state:'ok'}]})) as typeof fetch);
+  assert.deepEqual(matched.overrides,{matched:1,unmatched:[]});assert.equal(matched.checks.find(c=>c.id==='overrides-match')?.status,'ok');
+ }finally{await rm(dir,{recursive:true,force:true});}
+});
+test('catalog outage or missing credentials retain file validation without claiming override matches',async()=>{
+ const dir=await mkdtemp(join(tmpdir(),'omp-doctor-'));
+ try{
+  const path=join(dir,'overrides.json');
+  for(const valid of [true,false]){
+   await writeFile(path,valid?'{"vendor/a":{}}':'{broken');
+   for(const key of ['secret',undefined]){
+    const r=await runDoctor({...config,overridesFile:path},key,(async()=>new Response('private-body',{status:503})) as typeof fetch);
+    assert.equal(r.checks.find(c=>c.id==='overrides-file')?.status,valid?'ok':'error');
+    assert.equal(r.checks.find(c=>c.id==='models')?.status,'error');
+    assert.equal(r.overrides,undefined);assert.ok(!r.checks.some(c=>c.id==='overrides-match'));assert.ok(!JSON.stringify(r).includes('private-body'));
+   }
+  }
+ }finally{await rm(dir,{recursive:true,force:true});}
 });

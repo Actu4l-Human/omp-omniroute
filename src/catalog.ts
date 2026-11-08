@@ -1,6 +1,6 @@
 import type { ProviderModelConfig } from '@oh-my-pi/pi-coding-agent';
 import type { Effort } from '@oh-my-pi/pi-ai';
-import {applyOverridesToRow,type ModelOverrides,type ModelOverride} from './overrides.ts';
+import {applyOverridesToRow,auditOverrides,type ModelOverrides,type ModelOverride,type OverrideDiagnostics} from './overrides.ts';
 
 export const PROVIDER = 'omniroute';
 export interface Config {
@@ -38,6 +38,7 @@ export interface Catalog {
   diagnostics: {
     skippedByReason: Record<CatalogSkipReason, number>;
     fallbacks: Record<'chat' | 'embedding' | 'image', {contextWindow: number; maxTokens: number}>;
+    overrides: OverrideDiagnostics;
   };
 }
 const MAX_BODY_BYTES = 5 * 1024 * 1024;
@@ -113,8 +114,11 @@ export function mapCatalog(payload: unknown, config: Config, overrides:ModelOver
   const models: OmniRouteModel[] = [];
   const metadata = new Map<string, ModelMetadata>();
   const rejections = new Map<string, CatalogSkipReason[]>();
+  const rawIds=new Set<string>();
+  for(const candidate of envelope.data){const id=record(candidate)?.id;if(typeof id==='string')rawIds.add(id);}
   const diagnostics: Catalog['diagnostics'] = {
     skippedByReason: {invalid:0,duplicate:0,include:0,exclude:0,'unsupported-type':0,'tools-required':0,'unsupported-input':0},
+    overrides: auditOverrides(overrides,rawIds),
     fallbacks: {
       chat: {contextWindow:0,maxTokens:0},
       embedding: {contextWindow:0,maxTokens:0},
@@ -197,8 +201,9 @@ export async function fetchCatalog(config: Config, key?: string, fetchImpl: type
     response = await fetchImpl(`${config.baseUrl}/models`, { method:'GET', redirect:'error',
       headers:{Authorization:`Bearer ${key}`, Accept:'application/json'}, signal:AbortSignal.timeout(config.timeoutMs) });
   } catch { throw new Error('OmniRoute models request failed (network, redirect, or timeout)'); }
-  if (!response.ok) { await response.body?.cancel(); throw new Error(`OmniRoute models request failed (HTTP ${response.status})`); }
-  if (Number(response.headers.get('content-length')) > MAX_BODY_BYTES) { await response.body?.cancel(); throw new Error('OmniRoute models response is too large'); }
+  const cancel=()=>{void response.body?.cancel().catch(()=>{});};
+  if (!response.ok) { cancel(); throw new Error(`OmniRoute models request failed (HTTP ${response.status})`); }
+  if (Number(response.headers.get('content-length')) > MAX_BODY_BYTES) { cancel(); throw new Error('OmniRoute models response is too large'); }
   const reader = response.body?.getReader();
   if (!reader) throw new Error('OmniRoute models response has no body');
   const chunks: Uint8Array[] = []; let total = 0;
@@ -206,7 +211,7 @@ export async function fetchCatalog(config: Config, key?: string, fetchImpl: type
     for (;;) {
       const {done,value} = await reader.read(); if (done) break;
       total += value.byteLength;
-      if (total > MAX_BODY_BYTES) { await reader.cancel(); throw new Error('OmniRoute models response is too large'); }
+      if (total > MAX_BODY_BYTES) { void reader.cancel().catch(()=>{}); throw new Error('OmniRoute models response is too large'); }
       chunks.push(value);
     }
   } catch (error) {

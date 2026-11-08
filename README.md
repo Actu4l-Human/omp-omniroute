@@ -69,7 +69,7 @@ In the session:
 /omniroute-refresh
 ```
 
-Doctor performs authenticated **GETs only** and reports exact-ID health coverage; missing observations do not mean unhealthy models. A missing deployment-version header is informational, and a healthy response does not prove inference availability. `/omniroute-status` summarizes skipped-model reasons and fallback limits. Use `/omniroute-model` with a gateway ID or copied selector to inspect accepted or skipped models; Tab completes IDs and request controls. `/omniroute-usage` requires the key's optional `allowUsageCommand` permission.
+Doctor validates local overrides and performs authenticated **GETs only**, reporting exact-ID health coverage and unmatched override keys. Missing observations do not mean unhealthy models; a missing deployment-version header is informational. `/omniroute-status` separates catalog freshness from selected-model update failures and summarizes skipped models, fallback limits, and unmatched overrides. A model disappearing from the catalog warns without automatically switching your selection. Use `/omniroute-model` with a gateway ID or copied selector to inspect mapping; Tab completes IDs and request controls. `/omniroute-usage` requires the key's optional `allowUsageCommand` permission. None of these checks proves inference availability.
 
 ## Self-hosted gateway requirements
 

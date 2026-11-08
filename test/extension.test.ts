@@ -3,11 +3,11 @@ import assert from 'node:assert/strict';
 import { installOmniRoute } from '../src/extension.ts';
 import type { ExtensionAPI } from '@oh-my-pi/pi-coding-agent';
 const env = { OMNIROUTE_BASE_URL:'https://router.example/v1', OMNIROUTE_API_KEY:'test-key' };
-function harness(fetchImpl:typeof fetch) {
+function harness(fetchImpl:typeof fetch,selectModel:(model:any)=>Promise<boolean>=async()=>true) {
   const handlers = new Map<string,Function>(); const commands = new Map<string,any>();
-  let provider:any; let registrations=0; const notices:string[]=[]; const timers:Function[]=[];let clears=0;
+  let provider:any; let registrations=0; const notices:string[]=[];const noticeTypes:string[]=[];const statuses:string[]=[]; const timers:Function[]=[];let clears=0;
   const timeouts=new Map<number,Function>();let timeoutId=0;let registry:any[]=[];const selections:any[]=[];
-  const ctx:any={ui:{notify:(s:string)=>notices.push(s),setStatus:()=>{}},isIdle:()=>true,
+  const ctx:any={ui:{notify:(s:string,type:string)=>{notices.push(s);noticeTypes.push(type);},setStatus:(_id:string,status:string)=>statuses.push(status)},isIdle:()=>true,
     models:{current:()=>ctx.model},
     setInterval:(f:Function)=>{timers.push(f);return -timers.length;},
     setTimeout:(f:Function)=>{const id=++timeoutId;timeouts.set(id,()=>{timeouts.delete(id);return f();});return id;},
@@ -17,9 +17,9 @@ function harness(fetchImpl:typeof fetch) {
       try {registry=(await provider.fetchDynamicModels(env.OMNIROUTE_API_KEY)).map((model:any)=>({...model,provider:'omniroute'}));} catch { /* OMP retains last-good rows. */ }
     },find:(provider:string,id:string)=>registry.find(model=>model.provider===provider && model.id===id)}, hasUI:true};
   const pi:any={on:(name:string,fn:Function)=>handlers.set(name,fn),registerCommand:(name:string,opts:any)=>commands.set(name,opts),
-    setModel:async(model:any)=>{selections.push(model);ctx.model=model;return true;},
+    setModel:async(model:any)=>{if(!await selectModel(model))return false;selections.push(model);ctx.model=model;return true;},
     registerProvider:(name:string,p:any)=>{assert.equal(name,'omniroute');provider=p;registrations++;}};
-  return {install:()=>installOmniRoute(pi as ExtensionAPI,env,fetchImpl,(()=>{throw new Error('not used in lifecycle tests');})),handlers,commands,ctx,notices,timers,timeouts,selections,get registry(){return registry;},get provider(){return provider;},get registrations(){return registrations;},get clears(){return clears;}};
+  return {install:()=>installOmniRoute(pi as ExtensionAPI,env,fetchImpl,(()=>{throw new Error('not used in lifecycle tests');})),handlers,commands,ctx,notices,noticeTypes,statuses,timers,timeouts,selections,get registry(){return registry;},get provider(){return provider;},get registrations(){return registrations;},get clears(){return clears;}};
 }
 test('registers exactly one env-auth provider and uses scoped periodic refresh with cleanup',async()=>{
   let requests=0;
@@ -57,7 +57,7 @@ test('does not register a provider when key is missing',async()=>{
 test('rebinds an idle selected OmniRoute model after refreshing cached transport metadata',async()=>{
   const h=harness(async()=>new Response('{"data":[{"id":"m"}]}'));
   await h.install();
-  // The shared harness does not supply setModel: install a separate host with an observable binding.
+  // Use a separate host to exercise rebinding the cached transport descriptor.
   const handlers=new Map<string,Function>();let provider:any;let selected:any;
   const next={provider:'omniroute',id:'m',api:'omniroute-chat'};
   const pi:any={registerProvider:(_n:string,p:any)=>provider=p,registerCommand:()=>{},on:(n:string,f:Function)=>handlers.set(n,f),setModel:async(m:any)=>{selected=m;return true;}};
@@ -181,5 +181,58 @@ test('model inspection explains skipped IDs, fallback limits, and qualified sele
   assert.equal(JSON.parse(h.notices.at(-1)!).id,'omniroute/vendor/chat');
   await h.commands.get('omniroute-status').handler('',h.ctx);
   assert.match(h.notices.at(-1)!,/tools-required: 1/);assert.match(h.notices.at(-1)!,/chat: 1 context, 1 output/);
+  await h.handlers.get('session_shutdown')!({},h.ctx);
+});
+test('catalog success and changes survive rejected or thrown selected-model updates, including deferred updates',async()=>{
+  for(const failure of ['rejected','failed'])for(const deferred of [false,true]) {
+    let context=8192;let idle=true;let recover=false;
+    const h=harness(async()=>Response.json({data:[{id:'m',context_length:context}]}),async()=>{
+      if(recover)return true;
+      if(failure==='failed')throw new Error('private host error');
+      return false;
+    });
+    h.ctx.isIdle=()=>idle;
+    await h.install();await h.handlers.get('session_start')!({},h.ctx);
+    const selected=h.ctx.model=structuredClone(h.registry[0]);context=16384;idle=!deferred;
+    await h.timers[0]();
+    if(deferred){assert.equal(h.timeouts.size,1);idle=true;await [...h.timeouts.values()][0]();}
+    assert.equal(h.registry[0].contextWindow,16384);assert.equal(h.ctx.model,selected);assert.deepEqual(h.selections,[]);
+    assert.equal(h.statuses.at(-1),`OmniRoute: 1 models; selected model ${failure}`);
+    await h.commands.get('omniroute-status').handler('',h.ctx);assert.equal(h.noticeTypes.at(-1),'warning');
+    assert.ok(!h.notices.join('\n').includes('private host error'));
+    await h.commands.get('omniroute-changes').handler('',h.ctx);
+    assert.deepEqual(JSON.parse(h.notices.at(-1)!).changes.changed.map((change:any)=>[change.id,change.categories]),[['m',['limits']]]);
+    recover=true;await h.timers[0]();
+    assert.equal(h.ctx.model.contextWindow,16384);assert.equal(h.selections.length,1);
+    assert.equal(h.statuses.at(-1),'OmniRoute: 1 models');
+    await h.commands.get('omniroute-status').handler('',h.ctx);assert.equal(h.noticeTypes.at(-1),'info');
+    await h.handlers.get('session_shutdown')!({},h.ctx);
+  }
+});
+test('a missing selected model warns without switching, deduplicates alerts, and recovers when it returns',async()=>{
+  let present=true;
+  const h=harness(async()=>Response.json({data:present?[{id:'m'}]:[]}));
+  await h.install();await h.handlers.get('session_start')!({},h.ctx);
+  const selected=h.ctx.model=structuredClone(h.registry[0]);present=false;
+  await h.timers[0]();
+  assert.equal(h.registry.length,0);assert.equal(h.ctx.model,selected);assert.deepEqual(h.selections,[]);
+  assert.equal(h.statuses.at(-1),'OmniRoute: 0 models; selected model missing');
+  const warnings=h.noticeTypes.filter(type=>type==='warning').length;assert.equal(warnings,1);
+  await h.timers[0]();assert.equal(h.noticeTypes.filter(type=>type==='warning').length,warnings);
+  present=true;await h.timers[0]();
+  assert.equal(h.ctx.model,selected);assert.deepEqual(h.selections,[]);assert.equal(h.statuses.at(-1),'OmniRoute: 1 models');
+  await h.commands.get('omniroute-status').handler('',h.ctx);assert.equal(h.noticeTypes.at(-1),'info');
+  await h.handlers.get('session_shutdown')!({},h.ctx);
+});
+test('selection warnings do not follow a different selected model or survive a failed catalog refresh',async()=>{
+  let rows=[{id:'m'},{id:'other'}];let fail=false;
+  const h=harness(async()=>fail?new Response('',{status:503}):Response.json({data:rows}));
+  await h.install();await h.handlers.get('session_start')!({},h.ctx);
+  const selected=h.ctx.model=structuredClone(h.registry[0]);rows=[{id:'other'}];await h.timers[0]();
+  h.ctx.model=structuredClone(h.registry[0]);
+  await h.commands.get('omniroute-status').handler('',h.ctx);
+  assert.equal(h.noticeTypes.at(-1),'info');assert.equal(h.statuses.at(-1),'OmniRoute: 1 models');
+  h.ctx.model=selected;await h.timers[0]();fail=true;await h.timers[0]();
+  assert.equal(h.statuses.at(-1),'OmniRoute: catalog stale');assert.equal(h.ctx.model,selected);
   await h.handlers.get('session_shutdown')!({},h.ctx);
 });

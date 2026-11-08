@@ -85,6 +85,22 @@ The later remediation pass retained SDK pins at **18.18.1** and also exercised t
 
 These follow-up checks used local fixtures only. The text-renderer check does not establish interactive overlay appearance, live availability, or settled billing. No dependency pins, user profile settings, gateway permissions, or live inference were changed.
 
+## Post-1.3.0 diagnostic and CI hardening
+
+The next local pass added override-file preflight and exact-ID match diagnostics, preserved catalog errors across failed cancellation cleanup, separated catalog freshness from selected-model update outcomes, and warned without switching when a selected model disappeared.
+
+| Local check | Observed outcome |
+| --- | --- |
+| `npm.cmd test` | 83 of 84 passed initially; the sole failure was an incidental wording assertion in a new test, which was removed without changing runtime behavior |
+| `node --test test/overrides.test.ts test/doctor.test.ts` | All 22 affected tests passed after the test-only correction |
+| `npm.cmd run typecheck` | Passed |
+| `npm.cmd run test:integration` | 9 passed; 48 expect calls |
+| Workflow package step through Windows Git Bash | Passed real `npm.cmd pack`, keyed JSON parsing, allowlist checks, and the `v1.3.0` tag/version check; output paths redirected to a disposable directory |
+| `npm.cmd run test:cli -- <validated tarball>` | Passed automatic discovery, native/scoped chat and read-tool round trips, usage, controls/overrides, and outage fallback |
+| Workflow YAML and artifact contract checks | Three required lanes configured; one canonical artifact and all-lane publication gating retained |
+
+The new hosted Ubuntu/Node 24 and Windows/Node 24 jobs have not run locally. Local execution used Windows with Node 26.13.0 and the existing pinned Bun/SDK tools; `actionlint` was unavailable. No live gateway, profile changes, dependency updates, publication, or remote workflow execution was involved.
+
 ## Live deployment evidence
 
 The supplied root `.env` was an explicit validation input, parsed with Node `parseEnv(readFileSync('.env','utf8'))`, not shell evaluation or extension dotenv loading. Only authenticated GET requests were authorized and sent. No private URL, credential, raw remote payload, spend, or account detail is recorded here.

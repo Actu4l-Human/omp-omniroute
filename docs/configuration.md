@@ -36,10 +36,10 @@ HTTPS is recommended. URLs with embedded credentials, query parameters, or fragm
 | Command | Effect |
 | --- | --- |
 | `/omniroute-refresh` | Force online discovery for this provider only |
-| `/omniroute-status` | Show last refresh, accepted/skipped counts by reason, fallback limits by model kind, errors, and pricing caveats |
+| `/omniroute-status` | Show catalog freshness, skipped/fallback counts, unmatched override counts, selected-model update status, and pricing caveats |
 | `/omniroute-model <ID or selector>` | Show accepted-model metadata and override guidance, or explain why the exact gateway ID was skipped |
 | `/omniroute-usage` | Fetch key-scoped usage and provider quota snapshots |
-| `/omniroute-doctor` | Read-only endpoint, authentication, catalog, version-header, and optional health checks |
+| `/omniroute-doctor` | Validate local overrides and perform read-only endpoint, authentication, catalog, version-header, and optional health checks |
 | `/omniroute-last` | Show the last inspected chat request's routing/cost metadata |
 | `/omniroute-changes` | Show the latest meaningful catalog change |
 | `/omniroute-controls` | Show local settings; append a control and `on`/`off` to change it |
@@ -51,6 +51,10 @@ Tab completion supplies control names with `on`/`off`, and known accepted or rej
 Startup and periodic refreshes use OMP's scoped discovery API. Concurrent refreshes are coalesced, shutdown clears timers, and failures retain the last successful catalog. The extension contacts only the configured gateway, not an external metadata service.
 
 After successful discovery, an idle session rebinds its selected OmniRoute model only when the model configuration differs, including transport, capabilities, or prices. Refresh reads the live selection after discovery, so a manual refresh does not restore a model you switched away from while waiting. Structurally unchanged refreshes do not trigger model selection. If the session is busy, a managed idle check applies the pending metadata without another catalog request; it never rebinds during a stream. A changed selection, failed refresh, or shutdown cancels that pending rebind.
+
+Catalog freshness and selected-model updates are separate. A rejected or failed model update warns without marking a successfully fetched catalog stale or suppressing catalog change reporting. Status distinguishes metadata waiting for idle (`pending`), unavailable model authentication (`rejected`), update errors (`failed`), and a selected model absent from the latest discovered catalog (`missing`). Resolve authentication or retry `/omniroute-refresh` while idle as directed.
+
+When the selected model disappears or is filtered out, the extension warns but does not switch it automatically. Repeated unchanged refreshes do not repeat that warning. Select an available model or correct filters/overrides; the warning clears when the model returns, selection changes, or a new discovery failure makes the catalog stale.
 
 ## Catalog-to-OMP mapping
 
@@ -137,6 +141,10 @@ Allowed fields and constraints:
 
 Files must be regular JSON files of at most 256 KiB. Unknown fields, prototype keys, unsupported values, and contradictory API/type pairs fail the refresh, leaving the prior catalog under OMP's cache policy. Overrides cannot insert absent models, rename IDs, change destinations, set credentials/headers, or execute commands.
 
+`/omniroute-doctor` validates a configured file even when catalog access fails. Missing, unreadable, invalid, and oversized files produce actionable errors naming `OMNIROUTE_OVERRIDES_FILE`, without exposing local paths or invalid contents. Correct the file/path (relative paths use OMP's working directory), or unset the variable if overrides are no longer needed.
+
+Override keys are audited against unique **raw catalog IDs before local filtering**. Status and the footer warn about unmatched keys; doctor exposes `overrides.matched` and `overrides.unmatched`, with an optional `suggestedId`. For example, an override key `omniroute/vendor/chat` suggests `vendor/chat` only when the former is absent and the latter exists. An exact raw ID beginning with `omniroute/` always wins. Keys are never rewritten, and missing models are never inserted. If catalog access fails, doctor reports file validity without claiming match counts.
+
 Overrides apply before capability filtering. Explicit reasoning/vision overrides take priority over raw metadata. Native chat API overrides still use the wrapper if its features are enabled. `estimated` cannot turn missing input/output rates into known prices. Overrides are operator assertions, not proof the upstream supports the capability. Run `/omniroute-refresh` after editing; `/omniroute-model` separates the original row from overrides.
 
 ## Usage permission and reverse proxies
@@ -151,7 +159,7 @@ For a configured API path `/prefix/v1`, inference/catalog routes stay under `/pr
 
 ## Doctor and health
 
-Doctor validates the configured endpoint, GETs `/v1/models`, and optionally GETs `/v1/models/health`. It does not perform inference or visit management endpoints.
+Doctor validates the configured endpoint and any local override file, GETs `/v1/models`, and optionally GETs `/v1/models/health`. Override-file errors do not suppress the network checks. It does not perform inference or visit management endpoints.
 
 An absent `x-omniroute-version` produces an informational `ok` check with no `version` value. A present bounded semantic version is reported; malformed or empty values warn without echoing their contents. `X-Model-Catalog-Version`, such as `model-metadata-v1:static`, identifies the metadata schema, **not the deployed server release**.
 
@@ -190,6 +198,9 @@ OMP 18.18.1 caches extension catalogs by provider name without an extension conf
 | No provider/models | Process environment, root entry point, `/omniroute-doctor`, then `/omniroute-status`; do not assume `.env` was loaded |
 | Authentication failure or redirect | Inference API key, unintended inherited environment overriding profile dotenv, proxy `Authorization` forwarding, non-dashboard API URL |
 | Old filters/prices/transports | Successful online refresh; cached listing alone is insufficient |
+| Catalog current but selected metadata unchanged | Selected-model status in `/omniroute-status`; resolve authentication or retry refresh while idle |
+| Selected model missing | Choose an available model or check filters and gateway catalog; the extension never switches automatically |
+| Overrides have no effect | Doctor's `overrides-file` and `overrides-match` checks; use exact raw IDs and inspect `overrides.unmatched` suggestions |
 | Models skipped | `/omniroute-status` reason counts, then `/omniroute-model <ID>` for the retained rejection reason |
 | Incorrect limits/capabilities | `/omniroute-model` fallback metadata, gateway metadata, then exact-ID overrides |
 | Usage 403 | Operator-controlled `allowUsageCommand` permission; inference does not require it |
