@@ -1,5 +1,12 @@
 # Changelog
 
+## [1.4.1](https://github.com/Actu4l-Human/omp-omniroute/compare/v1.4.0...v1.4.1) (2026-11-08)
+
+
+### Bug Fixes
+
+* **controls:** refreshed models after transport control changes ([1068183](https://github.com/Actu4l-Human/omp-omniroute/commit/10681835748c86ae2e2de6b707dd556fd84fd83c))
+
 ## [1.4.0](https://github.com/Actu4l-Human/omp-omniroute/compare/v1.3.0...v1.4.0) (2026-11-08)
 
 
