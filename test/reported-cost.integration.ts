@@ -1,6 +1,8 @@
 import { test, expect } from 'bun:test';
 import { streamOmniRoute,streamNative } from '../src/reported-cost.ts';
 import type { Model, Context } from '@oh-my-pi/pi-ai';
+import {installOmniRoute} from '../src/extension.ts';
+import type {ExtensionAPI,ProviderConfig} from '@oh-my-pi/pi-coding-agent';
 const model:Model<'omniroute-chat'>={id:'fixture-chat',name:'Fixture',provider:'omniroute',api:'omniroute-chat',baseUrl:'https://router.example/v1',reasoning:false,input:['text'],cost:{input:1,output:2,cacheRead:0,cacheWrite:0},contextWindow:8192,maxTokens:2048,compat:{supportsUsageInStreaming:true}};
 const context:Context={messages:[{role:'user',content:'Hello',timestamp:Date.now()}]};
 const frame=(obj:unknown)=>`data: ${JSON.stringify(obj)}\n\n`;
@@ -82,3 +84,53 @@ test('disabled controls and observer errors never prevent response delivery',asy
   }});
   for await(const _ of events){}expect((await events.result()).usage.cost.total).toBe(0);
 });
+test('a cache-bypass change during native rebinding reaches the next real adapter request',async()=>{
+  const entered=Promise.withResolvers<void>();const gate=Promise.withResolvers<void>();
+  const handlers=new Map<string,Function>();const commands=new Map<string,any>();
+  let provider:ProviderConfig;let registry:Model<any>[]=[];let selected:Model<any>|undefined;let pause=false;
+  const work:Promise<unknown>[]=[];const headers:Headers[]=[];
+  const pi={
+    on:(name:string,handler:Function)=>handlers.set(name,handler),
+    registerCommand:(name:string,command:any)=>commands.set(name,command),
+    registerProvider:(_name:string,config:ProviderConfig)=>{provider=config;registerCustomApi('omniroute-chat',config.streamSimple!,'omniroute-control-race');},
+    setModel:async(next:Model<any>)=>{if(pause){entered.resolve();await gate.promise;}selected=next;return true;},
+  };
+  const ctx:any={
+    models:{current:()=>selected},isIdle:()=>true,hasUI:false,ui:{notify:()=>{}},
+    setInterval:()=>1,clearTimer:()=>{},
+    modelRegistry:{
+      refreshDiscoverableProviders:async()=>{
+        registry=(await provider.fetchDynamicModels!('fixture-key')).map(row=>({...row,provider:'omniroute',baseUrl:provider.baseUrl!})) as Model<any>[];
+      },
+      find:(name:string,id:string)=>registry.find(row=>row.provider===name && row.id===id),
+    },
+  };
+  const request=async()=>{
+    const events=streamSimple(selected!,context,{apiKey:'fixture-key',signal:AbortSignal.timeout(1500),fetch:async(_url,init)=>{
+      headers.push(new Headers(init?.headers));
+      return new Response(frame({id:'r',choices:[{index:0,delta:{content:'applied'},finish_reason:'stop'}],usage:{prompt_tokens:1,completion_tokens:1,total_tokens:2}})+'data: [DONE]\n\n',{headers:{'content-type':'text/event-stream'}});
+    }});
+    for await(const _ of events){}
+    expect((await events.result()).stopReason).toBe('stop');
+  };
+  try {
+    await installOmniRoute(pi as unknown as ExtensionAPI,{
+      OMNIROUTE_BASE_URL:'https://router.example/v1',OMNIROUTE_API_KEY:'fixture-key',OMNIROUTE_INSPECT_REQUESTS:'false',
+    },async()=>Response.json({data:[{id:'fixture-chat'}]}));
+    await handlers.get('session_start')!({},ctx);selected=registry[0];
+    expect(selected.api).toBe('openai-completions');
+    await request();expect(headers[0].has('X-OmniRoute-No-Cache')).toBe(false);
+    selected={...selected,name:'Stale fixture name'};pause=true;
+    work.push(commands.get('omniroute-refresh').handler('',ctx));await entered.promise;
+    let completed=false;
+    work.push(commands.get('omniroute-controls').handler('cache-bypass on',ctx).then(()=>{completed=true;}));
+    await Promise.resolve();expect(completed).toBe(false);
+    gate.resolve();await Promise.all(work);
+    expect(completed).toBe(true);expect(registry[0].api).toBe('omniroute-chat');expect(selected).toBe(registry[0]);
+    await request();expect(headers[1].get('X-OmniRoute-No-Cache')).toBe('true');
+  } finally {
+    gate.resolve();await Promise.allSettled(work);
+    await handlers.get('session_shutdown')?.({},ctx);
+    unregisterCustomApis('omniroute-control-race');
+  }
+},5000);

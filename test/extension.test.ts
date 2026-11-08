@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import { installOmniRoute } from '../src/extension.ts';
 import type { ExtensionAPI } from '@oh-my-pi/pi-coding-agent';
 const env = { OMNIROUTE_BASE_URL:'https://router.example/v1', OMNIROUTE_API_KEY:'test-key' };
-function harness(fetchImpl:typeof fetch,selectModel:(model:any)=>Promise<boolean>=async()=>true) {
+function harness(fetchImpl:typeof fetch,selectModel:(model:any)=>Promise<boolean>=async()=>true,settings:Record<string,string>={}) {
   const handlers = new Map<string,Function>(); const commands = new Map<string,any>();
   let provider:any; let registrations=0; const notices:string[]=[];const noticeTypes:string[]=[];const statuses:string[]=[]; const timers:Function[]=[];let clears=0;
   const timeouts=new Map<number,Function>();let timeoutId=0;let registry:any[]=[];const selections:any[]=[];
@@ -19,7 +19,7 @@ function harness(fetchImpl:typeof fetch,selectModel:(model:any)=>Promise<boolean
   const pi:any={on:(name:string,fn:Function)=>handlers.set(name,fn),registerCommand:(name:string,opts:any)=>commands.set(name,opts),
     setModel:async(model:any)=>{if(!await selectModel(model))return false;selections.push(model);ctx.model=model;return true;},
     registerProvider:(name:string,p:any)=>{assert.equal(name,'omniroute');provider=p;registrations++;}};
-  return {install:()=>installOmniRoute(pi as ExtensionAPI,env,fetchImpl,(()=>{throw new Error('not used in lifecycle tests');})),handlers,commands,ctx,notices,noticeTypes,statuses,timers,timeouts,selections,get registry(){return registry;},get provider(){return provider;},get registrations(){return registrations;},get clears(){return clears;}};
+  return {install:()=>installOmniRoute(pi as ExtensionAPI,{...env,...settings},fetchImpl,(()=>{throw new Error('not used in lifecycle tests');})),handlers,commands,ctx,notices,noticeTypes,statuses,timers,timeouts,selections,get registry(){return registry;},get provider(){return provider;},get registrations(){return registrations;},get clears(){return clears;}};
 }
 test('registers exactly one env-auth provider and uses scoped periodic refresh with cleanup',async()=>{
   let requests=0;
@@ -45,6 +45,57 @@ test('coalesces simultaneous timer and manual refresh',async()=>{
   await h.install();const start=h.handlers.get('session_start')!({},h.ctx);
   await Promise.resolve();const manual=h.commands.get('omniroute-refresh').handler('',h.ctx);
   await Promise.resolve();assert.equal(calls,1);resolve();await Promise.all([start,manual]);
+});
+for(const enabled of [true,false]) {
+  test(`coalesced controls complete one trailing pass to ${enabled?'scoped':'native'} chat`,{timeout:5000},async(t)=>{
+    const entered=Promise.withResolvers<void>();const gate=Promise.withResolvers<void>();
+    let requests=0;
+    const h=harness(async()=>{requests++;return Response.json({data:[{id:'m'}]});},
+      async()=>{entered.resolve();await gate.promise;return true;},
+      {OMNIROUTE_INSPECT_REQUESTS:'false',OMNIROUTE_BYPASS_CACHE:String(!enabled)});
+    const work:Promise<unknown>[]=[];
+    t.after(async()=>{gate.resolve();await Promise.allSettled(work);await h.handlers.get('session_shutdown')!({},h.ctx);});
+    await h.install();
+    h.ctx.model={provider:'omniroute',id:'m',api:enabled?'openai-completions':'omniroute-chat'};
+    work.push(h.handlers.get('session_start')!({},h.ctx));
+    await entered.promise;
+    let completed=0;
+    for(let i=0;i<3;i++)work.push(h.commands.get('omniroute-controls').handler(`cache-bypass ${enabled?'on':'off'}`,h.ctx).then(()=>completed++));
+    await Promise.resolve();assert.equal(completed,0);assert.equal(requests,1);
+    gate.resolve();await Promise.all(work);
+    assert.equal(completed,3);assert.equal(requests,2);
+    assert.equal(h.registry[0].api,enabled?'omniroute-chat':'openai-completions');
+    assert.equal(h.ctx.model,h.registry[0]);assert.equal(h.selections.length,2);
+  });
+}
+test('unchanged transport controls and alert changes retain ordinary refresh coalescing',{timeout:5000},async(t)=>{
+  const entered=Promise.withResolvers<void>();const gate=Promise.withResolvers<void>();let requests=0;
+  const h=harness(async()=>{requests++;return Response.json({data:[{id:'m'}]});},
+    async()=>{entered.resolve();await gate.promise;return true;},{OMNIROUTE_INSPECT_REQUESTS:'false'});
+  const work:Promise<unknown>[]=[];
+  t.after(async()=>{gate.resolve();await Promise.allSettled(work);await h.handlers.get('session_shutdown')!({},h.ctx);});
+  await h.install();h.ctx.model={provider:'omniroute',id:'m'};
+  work.push(h.handlers.get('session_start')!({},h.ctx));await entered.promise;
+  work.push(h.commands.get('omniroute-controls').handler('cache-bypass off',h.ctx));
+  await h.commands.get('omniroute-controls').handler('alerts off',h.ctx);
+  work.push(h.commands.get('omniroute-refresh').handler('',h.ctx));
+  gate.resolve();await Promise.all(work);
+  assert.equal(requests,1);assert.equal(h.ctx.model.api,'openai-completions');assert.equal(h.selections.length,1);
+});
+test('shutdown suppresses a control revision waiting behind authentication',{timeout:5000},async(t)=>{
+  const entered=Promise.withResolvers<void>();const gate=Promise.withResolvers<void>();let requests=0;
+  const h=harness(async()=>{requests++;return Response.json({data:[{id:'m'}]});},
+    async()=>{entered.resolve();await gate.promise;return true;},{OMNIROUTE_INSPECT_REQUESTS:'false'});
+  const work:Promise<unknown>[]=[];
+  t.after(async()=>{gate.resolve();await Promise.allSettled(work);});
+  await h.install();h.ctx.model={provider:'omniroute',id:'m'};
+  work.push(h.handlers.get('session_start')!({},h.ctx));await entered.promise;
+  work.push(h.commands.get('omniroute-controls').handler('cache-bypass on',h.ctx));
+  await h.handlers.get('session_shutdown')!({},h.ctx);
+  gate.resolve();await Promise.all(work);
+  // The host's in-flight setModel cannot be cancelled; no trailing work may start.
+  assert.equal(requests,1);assert.equal(h.selections.length,1);assert.equal(h.timeouts.size,0);
+  assert.equal(h.registry[0].api,'openai-completions');
 });
 test('does not register a provider when key is missing',async()=>{
   const handlers=new Map<string,Function>();let registered=false;const notices:string[]=[];

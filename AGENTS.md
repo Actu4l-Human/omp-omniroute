@@ -64,7 +64,7 @@ There is no build, lint, or formatter script. TypeScript checking uses `noEmit`;
 
 ## Runtime/Tooling Preferences
 
-Development requires Node >=24; npm scripts use package-local Bun **1.4.4**, TypeScript **7.0.2**, and OMP SDKs **18.18.1**. Preserve pins and the npm lockfile; do not substitute an older global Bun. `allowScripts` approves only `bun@1.4.4`'s installer.
+Development requires Node >=24; npm scripts use package-local Bun **1.4.4** and TypeScript **7.0.2**. Both OMP SDK development pins must track each published stable npm `latest` release, including breaking releases; exact pins and the lockfile record the validated snapshot, not a frozen compatibility target. Migrate public API callers rather than adding old-API shims. Preserve unrelated tool pins; update Bun and its version-specific installer approval only when SDK engine requirements require it. Do not substitute an older global Bun or upgrade the user's host/profile.
 
 Runtime installation needs `index.ts`, `package.json`, and `src/`, not extension-local dependencies. OMP supplies SDK imports. Configuration comes from process environment; `.env` is ignored by Git and is **not automatically loaded**. Never disclose credentials/private deployment data. Live checks require authorization; live inference needs explicit model/scope authorization, not merely access to `.env`.
 

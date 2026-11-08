@@ -2,7 +2,7 @@
 
 [README](../README.md) · [Configuration](configuration.md) · [Development commands](development.md)
 
-## Scope and baseline
+## Historical scope and baseline
 
 This review covers the supplied extension source snapshot, not a Git diff: the initial `git status --short --branch` reported that the directory was not a Git repository. No LSP was configured. The goal is an extension-registered provider using OMP's normal discovery, model kinds, streaming, tool loop, and usage interfaces, not an upstream patch or an OMP built-in provider.
 
@@ -14,7 +14,7 @@ This review covers the supplied extension source snapshot, not a Git diff: the i
 | Latest published OmniRoute release at review | v3.8.53, `191dce8d534ceb56c28a08e71381284a9a87838f` |
 | OmniRoute development source | `release/v3.8.54`, `a952f49838625656a3341feceb6e8a60c962b150` |
 
-These are fixed review baselines, not a promise that no newer release exists. Dependency pins were retained. The development branch is not described as a published 3.8.54 server. The deployment's exact release cannot be inferred from its catalog schema header.
+These are fixed historical review baselines, not current dependency policy. Pins were retained during that review; development and release verification now require each SDK's latest published stable npm release, including breaking releases. The development branch is not described as a published 3.8.54 server. The deployment's exact release cannot be inferred from its catalog schema header.
 
 The read-only upstream comparison found byte-identical stable/development versions of `src/lib/modelMetadataRegistry.ts`, `src/app/api/v1/models/catalogPricing.ts`, `src/app/api/v1/models/health/route.ts`, and `src/lib/usage/internalUsageCommand.ts`. The reviewed metadata, pricing, health, and usage contracts therefore apply to both inspected revisions.
 
@@ -100,6 +100,16 @@ The next local pass added override-file preflight and exact-ID match diagnostics
 | Workflow YAML and artifact contract checks | Three required lanes configured; one canonical artifact and all-lane publication gating retained |
 
 The new hosted Ubuntu/Node 24 and Windows/Node 24 jobs have not run locally. Local execution used Windows with Node 26.13.0 and the existing pinned Bun/SDK tools; `actionlint` was unavailable. No live gateway, profile changes, dependency updates, publication, or remote workflow execution was involved.
+
+## Post-1.4.0 SDK policy and control-refresh correction
+
+Both SDK development pins were updated from 18.18.1 to the execution-time stable `latest`, **18.18.2**. Bun **1.4.4** satisfies their published engine requirements; TypeScript remains **7.0.2**. CI independently rejects stale manifest/root-lock/resolved-lock versions and runs locked plus latest-install compatibility lanes. SDK freshness and all five lanes gate publication; the Ubuntu/Node 24 lane covers the declared minimum major. Hosted results remain unverified by local execution.
+
+Transport-control revisions now request a shared trailing refresh when joining a pass that did not include them. Focused local checks passed 20 lifecycle cases, including both native/scoped transitions, multiple waiters, unchanged controls and shutdown, plus the real-adapter regression confirming no initial bypass header and `X-OmniRoute-No-Cache: true` after the changed control completes.
+
+The completed runtime changes passed `npm.cmd test` (**88 passed**), `npm.cmd run typecheck`, and `npm.cmd run test:integration` (**10 passed**, 57 expect calls) locally on Windows/Node 26.13.0 with both SDKs at 18.18.2. These are fixture results, not hosted Ubuntu/Windows/Node 24 or live gateway evidence.
+
+**Unresolved upstream dependency:** the reviewed [OMP selection controller](https://github.com/can1357/oh-my-pi/blob/cb4801a7d6db666946a1b65fce5cdf50d2947b96/packages/coding-agent/src/modes/controllers/extension-ui-controller.ts#L254-L258), also present in published 18.18.2, awaits authentication before unconditional replacement. The public `setModel(model): Promise<boolean>` contract has no conditional parameter. Fixing selection/session changes during that await requires atomic replacement guarded by the expected selection and session after authentication. This local correction does not fix that separate race, patch the host, or restore a potentially stale selection.
 
 ## Live deployment evidence
 

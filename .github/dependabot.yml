@@ -1,0 +1,25 @@
+version: 2
+updates:
+  - package-ecosystem: npm
+    directory: '/'
+    schedule:
+      interval: cron
+      cronjob: '17 */6 * * *'
+      timezone: UTC
+    versioning-strategy: increase
+    allow:
+      - dependency-name: '@oh-my-pi/pi-ai'
+      - dependency-name: '@oh-my-pi/pi-coding-agent'
+    groups:
+      omp-sdk:
+        patterns:
+          - '@oh-my-pi/pi-ai'
+          - '@oh-my-pi/pi-coding-agent'
+        update-types: [major, minor, patch]
+    cooldown:
+      exclude:
+        - '@oh-my-pi/pi-ai'
+        - '@oh-my-pi/pi-coding-agent'
+    commit-message:
+      prefix: build
+      include: scope

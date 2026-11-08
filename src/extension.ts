@@ -30,6 +30,7 @@ export async function installOmniRoute(pi: ExtensionAPI, env: Record<string,stri
   };
   let pending: Promise<void>|undefined;
   let pendingGeneration=0;let sessionGeneration=0;
+  let controlRevision=0;let pendingControlRevision=0;
   let cancelIdleRebind:(()=>void)|undefined;
   let modelUpdate:{id:string;state:'pending'|'missing'|'rejected'|'failed'}|undefined;
   const modelUpdateMessages={
@@ -130,12 +131,13 @@ export async function installOmniRoute(pi: ExtensionAPI, env: Record<string,stri
   async function refresh(ctx: ExtensionContext): Promise<void> {
     const generation=sessionGeneration;
     if (pending) {
-      const sameSession=pendingGeneration===generation;
+      const represented=pendingGeneration===generation && pendingControlRevision===controlRevision;
       await pending;
-      if(!sameSession && generation===sessionGeneration)await refresh(ctx);
+      if(!represented && generation===sessionGeneration)await refresh(ctx);
       return;
     }
     pendingGeneration=generation;
+    pendingControlRevision=controlRevision;
     pending=(async()=>{
       try {
         if (typeof ctx.modelRegistry.refreshDiscoverableProviders !== 'function') throw new Error('This extension requires OMP 18.18.1 or later');
@@ -210,7 +212,9 @@ export async function installOmniRoute(pi: ExtensionAPI, env: Record<string,stri
     if(parts.length) {
       if(parts.length!==2 || !Object.hasOwn(controls,parts[0]) || !['on','off'].includes(parts[1])) {show(ctx,'Usage: /omniroute-controls [sticky|cache-bypass|memory-bypass|inspect|alerts] [on|off]','warning');return;}
       if(ctx.isIdle && !ctx.isIdle()){show(ctx,'Change request controls when the current turn is idle.','warning');return;}
-      const field=controls[parts[0] as keyof typeof controls];config[field]=parts[1]==='on';
+      const field=controls[parts[0] as keyof typeof controls];const enabled=parts[1]==='on';
+      if(field!=='catalogAlerts' && config[field]!==enabled)controlRevision++;
+      config[field]=enabled;
       if(field!=='catalogAlerts')await refresh(ctx);
     }
     show(ctx,{stickySessions:config.stickySessions,bypassCache:config.bypassCache,bypassMemory:config.bypassMemory,inspectRequests:config.inspectRequests,catalogAlerts:config.catalogAlerts,scope:'Chat requests in this OMP process only; environment defaults return on reload.',...(lastError?{warning:'Discovery failed; native cached models may not use new controls until a successful refresh.'}:{})});

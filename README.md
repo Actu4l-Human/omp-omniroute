@@ -2,7 +2,7 @@
 
 Use a self-hosted OmniRoute gateway as an **extension-registered `omniroute` provider** in Oh My Pi. The extension supplies authenticated model discovery, chat streaming and tools, embedding/image model kinds, diagnostics, and optional usage reporting. It integrates with OMP's normal provider interfaces; it is not an OMP built-in and does not patch or impersonate another provider.
 
-The compatibility baseline is **OMP 18.18.1** and **OmniRoute v3.8.53**. The inspected `release/v3.8.54` development revision shares the reviewed metadata, pricing, health, and usage contracts; it is not the latest published release in this review. See [source revisions and verification limits](docs/compatibility.md).
+Development and release verification target the **latest published stable OMP SDK**, including breaking releases. Exact development pins record the validated snapshot, not a frozen compatibility baseline. The gateway contract review covers **OmniRoute v3.8.53** and an inspected `release/v3.8.54` development revision. See [historical source revisions and verification limits](docs/compatibility.md).
 
 Package version: **1.4.0**. <!-- x-release-please-version -->
 
@@ -21,7 +21,7 @@ With gateway environment variables configured as below, load `$HOME/omp-extensio
 
 ## Install from this folder
 
-Use a working OMP 18.18.1 installation with its required Bun >=1.4.4. Keep `index.ts`, `package.json`, and the complete `src/` directory together. Runtime installation does **not** need `npm ci` or an extension-local `node_modules`.
+Use a working latest stable OMP installation with the Bun version required by that release. The extension does not upgrade your host or profile. Keep `index.ts`, `package.json`, and the complete `src/` directory together. Runtime installation does **not** need `npm ci` or an extension-local `node_modules`.
 
 Place this source folder at a permanent location, such as `$HOME/omp-extensions/omp-omniroute`. Root `index.ts` is the only entry point; do not load files under `src/` individually.
 
