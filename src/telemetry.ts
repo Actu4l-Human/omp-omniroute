@@ -50,9 +50,12 @@ export function createRequestObserver(modelId:string,pricingStatus:string|undefi
       else if(h['x-omniroute-cache']==='HIT'||h['x-omniroute-cache']==='MISS')info.cacheHit=h['x-omniroute-cache']==='HIT';
     },
     sse(data:string) {
-      const cost=readReportedCost(data);if(cost!==undefined)reported=cost;
       // Read only routing identifiers and usage total. Never retain prompt/content bytes.
-      try {const event=obj(JSON.parse(data));info.responseModel??=text(event.model);info.upstreamProvider??=text(event.provider);info.requestId??=text(event.id);}catch{}
+      try {
+        const payload:unknown=JSON.parse(data);
+        const cost=readReportedCost(payload);if(cost!==undefined)reported=cost;
+        const event=obj(payload);info.responseModel??=text(event.model);info.upstreamProvider??=text(event.provider);info.requestId??=text(event.id);
+      }catch{}
     },
     get reportedCost(){return reported;},
     finish(message:unknown,ended=Date.now()):RequestRecord {

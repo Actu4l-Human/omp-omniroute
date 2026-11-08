@@ -20,6 +20,19 @@ test('observer records whitelisted metadata, separates reported from estimated a
   assert.equal(r.responseModel,'served-model');assert.equal(r.requestId,'r1');
   assert.ok(!JSON.stringify(r).includes('PRIVATE'));assert.ok(!JSON.stringify(r).includes('SECRET'));
 });
+test('observer preserves zero cost and routing identifiers after invalid or terminal events',()=>{
+  const o=createRequestObserver('requested','estimated',0);
+  o.sse('{"model":"served","provider":"upstream","id":"request","usage":{"cost":0.5}}');
+  o.sse('{"usage":{"cost":0}}');
+  assert.equal(o.reportedCost,0);
+  for(const data of ['{','[DONE]','null','[]','0','true','"text"','{"usage":null}','{"usage":{"cost":-1}}']) {
+    o.sse(data);
+    assert.equal(o.reportedCost,0);
+    const r=o.finish({},10);
+    assert.deepEqual(r.cost,{source:'reported',usd:0});
+    assert.equal(r.responseModel,'served');assert.equal(r.upstreamProvider,'upstream');assert.equal(r.requestId,'request');
+  }
+});
 test('new response resets retry metadata and unknown cost is not reported as free',()=>{
   const o=createRequestObserver('auto/fast','variable',0);o.response({status:200,headers:{'x-omniroute-request-id':'attempt1'}});o.sse('{"usage":{"cost":0.5}}');
   o.response({status:200,headers:{'x-omniroute-request-id':'attempt2','x-omniroute-response-cost':'0.0000000000'}});

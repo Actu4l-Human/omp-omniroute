@@ -62,6 +62,34 @@ test('rebinds an idle selected OmniRoute model after refreshing cached transport
   await handlers.get('session_start')!({},ctx);
   assert.equal(selected,next);
 });
+test('refresh rebinds changed metadata only while idle after successful discovery',async()=>{
+  let fail=false;let idle=true;let selections=0;
+  const fetchImpl:typeof fetch=async()=>fail?new Response('',{status:503}):Response.json({data:[{id:'m'}]});
+  const h=harness(fetchImpl);
+  const handlers=new Map<string,Function>();let provider:any;
+  let current={provider:'omniroute',id:'m',api:'openai-completions',input:['text'],cost:{input:1,output:2}};
+  const ctx:any={...h.ctx,model:structuredClone(current),isIdle:()=>idle,
+    modelRegistry:{refreshDiscoverableProviders:async()=>{
+      try {await provider.fetchDynamicModels('test-key');} catch { /* OMP retains last-good rows. */ }
+    },find:()=>structuredClone(current)}};
+  const pi:any={registerProvider:(_n:string,p:any)=>provider=p,registerCommand:()=>{},
+    on:(n:string,f:Function)=>handlers.set(n,f),setModel:async(m:any)=>{selections++;ctx.model=m;return true;}};
+  await installOmniRoute(pi,env,fetchImpl,(()=>{throw new Error('not used');}));
+  await handlers.get('session_start')!({},ctx);
+  await h.timers[0]();await h.timers[0]();
+  assert.equal(selections,0);
+  current={...current,api:'omniroute-chat',input:['text','image'],cost:{input:3,output:4}};
+  await h.timers[0]();
+  assert.equal(selections,1);assert.deepEqual(ctx.model,current);
+  const selected=ctx.model;
+  current={...current,cost:{input:5,output:6}};idle=false;
+  await h.timers[0]();
+  assert.equal(selections,1);assert.equal(ctx.model,selected);
+  idle=true;fail=true;
+  await h.timers[0]();
+  assert.equal(selections,1);assert.equal(ctx.model,selected);
+  await handlers.get('session_shutdown')!({},ctx);
+});
 test('registers usage and doctor commands without making background management requests',async()=>{
   const paths:string[]=[];
   const h=harness(async(url)=>{const path=new URL(String(url)).pathname;paths.push(path);

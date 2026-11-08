@@ -46,6 +46,8 @@ Controls are `sticky`, `cache-bypass`, `memory-bypass`, `inspect`, and `alerts`.
 
 Startup and periodic refreshes use OMP's scoped discovery API. Concurrent refreshes are coalesced, shutdown clears timers, and failures retain the last successful catalog. The extension contacts only the configured gateway, not an external metadata service.
 
+After successful discovery, an idle session rebinds its selected OmniRoute model only when the model configuration differs, including transport, capabilities, or prices. Structurally unchanged refreshes do not trigger model selection; busy sessions and failed refreshes never rebind.
+
 ## Catalog-to-OMP mapping
 
 | Gateway field | OMP interpretation |
@@ -86,7 +88,7 @@ Inspection is enabled by default, so default chat models use the wrapper even wi
 
 OMP's outer custom-stream dispatcher owns the provider concurrency permit and `beforeDispatch` check. Inner delegation avoids acquiring them twice. Bounded socket cleanup can outlive a completed logical request by up to 2.5 seconds; the permit does not strictly count still-draining sockets.
 
-Reported cost is authoritative only when supplied; otherwise the catalog estimate or unknown placeholder remains. No extra billing request is made. Accounting buckets are scaled proportionally to keep OMP aggregators additive; only the reported total is authoritative, not the inferred input/output allocation. Embedding/image costs are not intercepted. Use gateway/provider accounting for a complete bill.
+Reported cost is authoritative only when supplied; otherwise the catalog estimate or unknown placeholder remains. No extra billing request is made. Accounting buckets are allocated by their share of the estimate to keep OMP aggregators additive, including tiny positive estimates; only the reported total is authoritative, not the inferred input/output allocation. Embedding/image costs are not intercepted. Use gateway/provider accounting for a complete bill.
 
 ## Exact-ID overrides
 
@@ -152,6 +154,8 @@ Health states other than `ok` warn. Unknown states normalize to `unknown`; unsup
 `/omniroute-last` keeps only the latest inspected chat request's metadata in memory: requested model, available routing identifiers, request ID, status, elapsed time, tokens, and cost provenance. It retains no messages, prompts, tool arguments, arbitrary headers, API keys, or cookies.
 
 `servedModel` comes from routing headers when available; `responseModel` may merely be an alias. `observedResponses` counts OMP response callbacks, not every internal attempt/failover. Some failure metadata is unavailable. `gatewayCostHeaderUsd` stays separate because it can be an estimate or an unpriced zero. `ompTotalUsd` can differ from a reported total when reported-cost accounting is off. Native image/embedding requests are not inspected.
+
+Malformed JSON, terminal `[DONE]` events, and non-object payloads do not clear previously observed cost or routing identifiers. A valid reported zero replaces an earlier reported cost; a new response resets the observation for retries.
 
 After the first successful baseline, catalog changes track additions/removals and changed limits, capabilities, transports, or pricing. Unchanged results and raw field ordering do not notify. Alerts contain counts; `/omniroute-changes` provides details. Both baseline and latest change are process-local, not an audit log. Disable notifications with `OMNIROUTE_CATALOG_ALERTS=false` or `/omniroute-controls alerts off`.
 

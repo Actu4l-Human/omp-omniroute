@@ -6,6 +6,7 @@ import {createUsageProvider,fetchUsageSnapshot} from './usage.ts';
 import {runDoctor} from './doctor.ts';
 import type {RequestRecord} from './telemetry.ts';
 import {randomUUID} from 'node:crypto';
+import {isDeepStrictEqual} from 'node:util';
 
 /** Runtime dependencies are injectable for offline verification; no credentials are persisted. */
 export async function installOmniRoute(pi: ExtensionAPI, env: Record<string,string|undefined> = process.env, fetchImpl: typeof fetch = fetch, adapter?: NonNullable<ProviderConfig['streamSimple']>): Promise<void> {
@@ -69,7 +70,7 @@ export async function installOmniRoute(pi: ExtensionAPI, env: Record<string,stri
         // Never change the selection in the middle of a streamed turn.
         if (!lastError && ctx.model?.provider===PROVIDER && ctx.isIdle()) {
           const current=ctx.modelRegistry.find(PROVIDER,ctx.model.id);
-          if (current) await pi.setModel(current);
+          if (current && !isDeepStrictEqual(current,ctx.model)) await pi.setModel(current);
         }
       } catch(error) {lastError=error instanceof Error?error.message:'OmniRoute refresh failed';}
       if(!lastError) {

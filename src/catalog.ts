@@ -81,9 +81,9 @@ export function readConfig(env: Record<string, string | undefined>): Config {
 export function usesChatAdapter(config:Config):boolean {
   return config.reportedCost || config.inspectRequests || config.stickySessions || config.bypassCache || config.bypassMemory;
 }
-function matches(id: string, glob: string): boolean {
+function compileGlob(glob: string): RegExp {
   const pattern = glob.split('*').map(part => part.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')).join('.*');
-  return new RegExp(`^${pattern}$`).test(id);
+  return new RegExp(`^${pattern}$`);
 }
 function positiveInt(value: unknown): number | undefined {
   return typeof value === 'number' && Number.isSafeInteger(value) && value > 0 ? value : undefined;
@@ -103,6 +103,7 @@ function price(pricing: Record<string, unknown>, perMillion: string, perToken: s
 export function mapCatalog(payload: unknown, config: Config, overrides:ModelOverrides = {}): Catalog {
   const envelope = record(payload);
   if (!envelope || !Array.isArray(envelope.data)) throw new Error('OmniRoute models response must contain a data array');
+  const include=config.include.map(compileGlob), exclude=config.exclude.map(compileGlob), variablePrice=config.variablePrice.map(compileGlob);
   const models: OmniRouteModel[] = [];
   const metadata = new Map<string, ModelMetadata>();
   let skipped = 0;
@@ -111,7 +112,7 @@ export function mapCatalog(payload: unknown, config: Config, overrides:ModelOver
     const id = original?.id;
     const {effective:row,applied}=original?applyOverridesToRow(original,overrides):{effective:undefined,applied:undefined};
     if (!row || typeof id !== 'string' || !id || id.length > 512 || /[\x00-\x1f\x7f]/.test(id) || metadata.has(id)) { skipped++; continue; }
-    if ((config.include.length > 0 && !config.include.some(g => matches(id, g))) || config.exclude.some(g => matches(id, g))) { skipped++; continue; }
+    if ((include.length > 0 && !include.some(pattern => pattern.test(id))) || exclude.some(pattern => pattern.test(id))) { skipped++; continue; }
     const type = typeof row.type === 'string' ? row.type.toLowerCase() : 'chat';
     const kind = type === 'embedding' ? 'embedding' : type === 'image' ? 'image' : type === 'chat' || type === 'text' || type === 'completion' ? 'chat' : undefined;
     if (!kind) { skipped++; continue; }
@@ -137,7 +138,7 @@ export function mapCatalog(payload: unknown, config: Config, overrides:ModelOver
       cacheRead: price(pricing, 'cached', 'input_cache_read'), cacheWrite: price(pricing, 'cache_creation', 'input_cache_write'),
     };
     const missingPriceFields = Object.entries(rates).filter(([,value]) => value === undefined).map(([key]) => key);
-    const variable = row.owned_by === 'combo' || row.type === 'combo' || pricing.variable === true || pricing.type === 'variable' || config.variablePrice.some(g => matches(id,g));
+    const variable = row.owned_by === 'combo' || row.type === 'combo' || pricing.variable === true || pricing.type === 'variable' || variablePrice.some(pattern => pattern.test(id));
     const pricingStatus = applied?.pricingStatus==='unknown' ? 'unknown' : applied?.pricingStatus==='variable' ? 'variable' :
       variable && applied?.pricingStatus!=='estimated' ? 'variable' : rates.input===undefined || rates.output===undefined ? 'unknown' : 'estimated';
     const unpriced=pricingStatus!=='estimated';
