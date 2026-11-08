@@ -62,10 +62,91 @@ test('applies comma-separated glob include/exclude filters without changing IDs'
 });
 test('rejects malformed catalog envelopes, skips malformed and duplicate rows', () => {
   assert.throws(()=>mapCatalog({items:[]},config()),/data array/);
-  const {models}=mapCatalog({data:[null,{},chat({id:'bad\nname'}),chat(),chat(),chat({id:'limits',context_length:-1,max_output_tokens:NaN})]},config());
-  assert.deepEqual(models.map(x=>x.id),['vendor/chat','limits']);
-  assert.equal(models[1].contextWindow,8192);
-  assert.equal(models[1].maxTokens,2048);
+  const malformed = [null, {}, chat({id:42}), chat({id:''}), chat({id:'bad\nname'}), chat({id:'x'.repeat(513)})];
+  const result=mapCatalog({data:[...malformed,chat(),chat({type:'audio'}),chat({id:'limits',context_length:-1,max_output_tokens:NaN})]},config());
+  assert.deepEqual(result.models.map(x=>x.id),['vendor/chat','limits']);
+  assert.equal(result.models[1].contextWindow,8192);
+  assert.equal(result.models[1].maxTokens,2048);
+  assert.equal(result.skipped,7);
+  assert.deepEqual(result.diagnostics.skippedByReason,{
+    invalid:6,duplicate:1,include:0,exclude:0,'unsupported-type':0,'tools-required':0,'unsupported-input':0,
+  });
+  assert.deepEqual([...result.rejections],[['vendor/chat',['duplicate']]]);
+  assert.deepEqual(result.diagnostics.fallbacks,{
+    chat:{contextWindow:1,maxTokens:1},embedding:{contextWindow:0,maxTokens:0},image:{contextWindow:0,maxTokens:0},
+  });
+});
+test('attributes each skipped row to its first rejection without retaining rejected metadata',()=>{
+  const opts=readConfig({...env,OMNIROUTE_INCLUDE:'vendor/*',OMNIROUTE_EXCLUDE:'*/blocked'});
+  const result=mapCatalog({data:[
+    chat(),
+    chat({id:'other/blocked',type:'audio'}),
+    chat({id:'vendor/blocked',type:'audio'}),
+    {id:'vendor/audio',type:'audio',capabilities:{tool_calling:false}},
+    chat({id:'vendor/no-tools',capabilities:{tool_calling:false},input_modalities:['audio']}),
+    chat({id:'vendor/no-input',input_modalities:[]}),
+    chat({id:'vendor/audio-input',input_modalities:['audio'],private_payload:'not retained'}),
+  ]},opts);
+  assert.deepEqual(result.models.map(x=>x.id),['vendor/chat']);
+  assert.deepEqual([...result.metadata.keys()],['vendor/chat']);
+  assert.equal(result.skipped,6);
+  assert.deepEqual(result.diagnostics.skippedByReason,{
+    invalid:0,duplicate:0,include:1,exclude:1,'unsupported-type':1,'tools-required':1,'unsupported-input':2,
+  });
+  assert.equal(Object.values(result.diagnostics.skippedByReason).reduce((sum,count)=>sum+count,0),result.skipped);
+  assert.deepEqual([...result.rejections],[
+    ['other/blocked',['include']],['vendor/blocked',['exclude']],['vendor/audio',['unsupported-type']],
+    ['vendor/no-tools',['tools-required']],['vendor/no-input',['unsupported-input']],['vendor/audio-input',['unsupported-input']],
+  ]);
+  assert.deepEqual(result.diagnostics.fallbacks,{
+    chat:{contextWindow:0,maxTokens:0},embedding:{contextWindow:0,maxTokens:0},image:{contextWindow:0,maxTokens:0},
+  });
+});
+test('keeps unique reasons per ID without treating previously rejected rows as accepted duplicates',()=>{
+  const id='vendor/retried';
+  const accepted=chat({id});
+  const result=mapCatalog({data:[
+    chat({id,type:'audio'}),
+    chat({id,capabilities:{tool_calling:false}}),
+    chat({id,capabilities:{tool_calling:false},input_modalities:[]}),
+    accepted,
+    chat({id,type:'image',pricing:{input:99,output:99}}),
+  ]},config());
+  assert.deepEqual(result.models.map(x=>[x.id,x.kind,x.cost.input]),[[id,'chat',2]]);
+  assert.deepEqual(result.metadata.get(id)?.raw,accepted);
+  assert.deepEqual([...result.rejections],[[id,['unsupported-type','tools-required','duplicate']]]);
+  assert.equal(result.skipped,4);
+  assert.deepEqual(result.diagnostics.skippedByReason,{
+    invalid:0,duplicate:1,include:0,exclude:0,'unsupported-type':1,'tools-required':2,'unsupported-input':0,
+  });
+});
+test('counts actual default limits by mapped kind, not explicit values or clamping',()=>{
+  const result=mapCatalog({data:[
+    {id:'chat-default'},
+    chat({id:'chat-explicit',context_length:8192,max_output_tokens:2048}),
+    chat({id:'chat-clamped',context_length:64,max_output_tokens:2048}),
+    {id:'embed-context',type:'embedding',context_length:0,max_output_tokens:512},
+    {id:'embed-output',type:'embedding',context_length:128,max_output_tokens:NaN},
+    {id:'image-output',type:'image',context_length:4096},
+    {id:'image-context',type:'image',max_output_tokens:1},
+    {id:'override-explicit',type:'image'},
+  ]},config(),{'override-explicit':{context_length:8192,max_output_tokens:2048}});
+  assert.deepEqual(result.diagnostics.fallbacks,{
+    chat:{contextWindow:1,maxTokens:1},embedding:{contextWindow:1,maxTokens:1},image:{contextWindow:1,maxTokens:1},
+  });
+  assert.equal(result.skipped,0);
+  assert.equal(result.rejections.size,0);
+  assert.deepEqual(result.models.map(x=>[x.id,x.contextWindow,x.maxTokens]),[
+    ['chat-default',8192,2048],['chat-explicit',8192,2048],['chat-clamped',64,64],
+    ['embed-context',8192,512],['embed-output',128,128],['image-output',4096,2048],
+    ['image-context',8192,1],['override-explicit',8192,2048],
+  ]);
+  assert.deepEqual(result.metadata.get('chat-default')?.defaultsUsed,['context_length=8192','max_output_tokens=2048']);
+  assert.deepEqual(result.metadata.get('embed-context')?.defaultsUsed,['context_length=8192']);
+  assert.deepEqual(result.metadata.get('embed-output')?.defaultsUsed,['max_output_tokens=2048']);
+  assert.deepEqual(result.metadata.get('image-output')?.defaultsUsed,['max_output_tokens=2048']);
+  assert.deepEqual(result.metadata.get('image-context')?.defaultsUsed,['context_length=8192']);
+  for(const id of ['chat-explicit','chat-clamped','override-explicit'])assert.deepEqual(result.metadata.get(id)?.defaultsUsed,[]);
 });
 test('authenticated discovery forbids redirects and bounds request time',async()=>{
   let called=false;

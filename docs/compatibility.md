@@ -63,6 +63,28 @@ The final sequence reran `npm.cmd ci && npm.cmd test && npm.cmd run typecheck &&
 
 All inference fixtures use `fixture-key`, isolated state, bounded requests/subprocesses, and teardown. No real gateway key is passed to these suites. Runtime registration mocks alone are not the basis for the CLI/transport findings.
 
+## Functionality and QoL follow-up
+
+The later remediation pass retained SDK pins at **18.18.1** and also exercised the installed **OMP 18.18.2** binary. The earlier tables remain historical observations, not current catalog counts.
+
+- Refresh uses the live model selection rather than a command-context snapshot. Changed metadata waits for idle; selection changes, refresh failures, and shutdown cancel deferred rebinding.
+- Discovery retains sanitized rejection reasons, reports skipped counts and fallback limits by kind, and supports raw or provider-qualified inspection with command argument completion.
+- Personal USD limits expose consumed and remaining fractions. Explicit percentage overages remain visible as raw amounts while normalized fractions stay within the SDK's 0–1 range and report exhaustion.
+- Doctor reports exact-ID health coverage separately from observed health states; an empty observation set warns rather than implying health.
+- Configuration documentation distinguishes OMP profile dotenv loading from the extension's environment-only configuration and explains inherited-variable precedence.
+
+| Local check | Observed outcome |
+| --- | --- |
+| `npm.cmd test` | 72 passed, 0 failed |
+| `npm.cmd run typecheck` | Passed |
+| `npm.cmd run test:integration` | 9 passed, 0 failed; 48 expect calls |
+| `npm.cmd run test:cli` | Passed against pinned SDK 18.18.1, including native usage fractions and existing read-tool/outage cases |
+| `OMNIROUTE_SMOKE_CLI=omp` with the CLI smoke command | Same scenarios passed against installed OMP 18.18.2 in a disposable profile |
+| Actual SDK autocomplete provider | Control arguments and qualified skipped-model IDs completed and replaced the intended argument text |
+| Actual SDK usage text renderer | Fixture spending of 1.25 USD against 5 USD rendered a 25% bar and 75.0% remaining |
+
+These follow-up checks used local fixtures only. The text-renderer check does not establish interactive overlay appearance, live availability, or settled billing. No dependency pins, user profile settings, gateway permissions, or live inference were changed.
+
 ## Live deployment evidence
 
 The supplied root `.env` was an explicit validation input, parsed with Node `parseEnv(readFileSync('.env','utf8'))`, not shell evaluation or extension dotenv loading. Only authenticated GET requests were authorized and sent. No private URL, credential, raw remote payload, spend, or account detail is recorded here.

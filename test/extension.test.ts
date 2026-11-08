@@ -6,15 +6,20 @@ const env = { OMNIROUTE_BASE_URL:'https://router.example/v1', OMNIROUTE_API_KEY:
 function harness(fetchImpl:typeof fetch) {
   const handlers = new Map<string,Function>(); const commands = new Map<string,any>();
   let provider:any; let registrations=0; const notices:string[]=[]; const timers:Function[]=[];let clears=0;
-  const ctx:any={ui:{notify:(s:string)=>notices.push(s),setStatus:()=>{}},
-    setInterval:(f:Function)=>{timers.push(f);return timers.length;},clearTimer:()=>{clears++;},
+  const timeouts=new Map<number,Function>();let timeoutId=0;let registry:any[]=[];const selections:any[]=[];
+  const ctx:any={ui:{notify:(s:string)=>notices.push(s),setStatus:()=>{}},isIdle:()=>true,
+    models:{current:()=>ctx.model},
+    setInterval:(f:Function)=>{timers.push(f);return -timers.length;},
+    setTimeout:(f:Function)=>{const id=++timeoutId;timeouts.set(id,()=>{timeouts.delete(id);return f();});return id;},
+    clearTimer:(id:number)=>{clears++;timeouts.delete(id);},
     modelRegistry:{ refreshDiscoverableProviders:async(ids:string[],strategy:string)=>{
       assert.deepEqual(ids,['omniroute']);assert.equal(strategy,'online');
-      try {await provider.fetchDynamicModels(env.OMNIROUTE_API_KEY);} catch { /* OMP retains last-good rows. */ }
-    }}, hasUI:true};
+      try {registry=(await provider.fetchDynamicModels(env.OMNIROUTE_API_KEY)).map((model:any)=>({...model,provider:'omniroute'}));} catch { /* OMP retains last-good rows. */ }
+    },find:(provider:string,id:string)=>registry.find(model=>model.provider===provider && model.id===id)}, hasUI:true};
   const pi:any={on:(name:string,fn:Function)=>handlers.set(name,fn),registerCommand:(name:string,opts:any)=>commands.set(name,opts),
+    setModel:async(model:any)=>{selections.push(model);ctx.model=model;return true;},
     registerProvider:(name:string,p:any)=>{assert.equal(name,'omniroute');provider=p;registrations++;}};
-  return {install:()=>installOmniRoute(pi as ExtensionAPI,env,fetchImpl,(()=>{throw new Error('not used in lifecycle tests');})),handlers,commands,ctx,notices,timers,get provider(){return provider;},get registrations(){return registrations;},get clears(){return clears;}};
+  return {install:()=>installOmniRoute(pi as ExtensionAPI,env,fetchImpl,(()=>{throw new Error('not used in lifecycle tests');})),handlers,commands,ctx,notices,timers,timeouts,selections,get registry(){return registry;},get provider(){return provider;},get registrations(){return registrations;},get clears(){return clears;}};
 }
 test('registers exactly one env-auth provider and uses scoped periodic refresh with cleanup',async()=>{
   let requests=0;
@@ -57,7 +62,7 @@ test('rebinds an idle selected OmniRoute model after refreshing cached transport
   const next={provider:'omniroute',id:'m',api:'omniroute-chat'};
   const pi:any={registerProvider:(_n:string,p:any)=>provider=p,registerCommand:()=>{},on:(n:string,f:Function)=>handlers.set(n,f),setModel:async(m:any)=>{selected=m;return true;}};
   await installOmniRoute(pi,{...env,OMNIROUTE_REPORTED_COST:'true'},async()=>new Response('{"data":[{"id":"m"}]}'),(()=>{throw new Error('not used');}));
-  const ctx:any={...h.ctx,model:{provider:'omniroute',id:'m',api:'openai-completions'},isIdle:()=>true,
+  const ctx:any={...h.ctx,model:{provider:'omniroute',id:'m',api:'openai-completions'},models:{current:()=>ctx.model},isIdle:()=>true,
     modelRegistry:{refreshDiscoverableProviders:async()=>{await provider.fetchDynamicModels('test-key');},find:()=>next}};
   await handlers.get('session_start')!({},ctx);
   assert.equal(selected,next);
@@ -68,7 +73,7 @@ test('refresh rebinds changed metadata only while idle after successful discover
   const h=harness(fetchImpl);
   const handlers=new Map<string,Function>();let provider:any;
   let current={provider:'omniroute',id:'m',api:'openai-completions',input:['text'],cost:{input:1,output:2}};
-  const ctx:any={...h.ctx,model:structuredClone(current),isIdle:()=>idle,
+  const ctx:any={...h.ctx,model:structuredClone(current),models:{current:()=>ctx.model},isIdle:()=>idle,
     modelRegistry:{refreshDiscoverableProviders:async()=>{
       try {await provider.fetchDynamicModels('test-key');} catch { /* OMP retains last-good rows. */ }
     },find:()=>structuredClone(current)}};
@@ -115,4 +120,66 @@ test('controls toggle only supported local settings, refresh routing, and reject
   await h.commands.get('omniroute-controls').handler('cache-bypass on',h.ctx);assert.match(h.notices.at(-1)!,/"bypassCache": true/);
   await h.commands.get('omniroute-controls').handler('Authorization Bearer secret',h.ctx);assert.match(h.notices.at(-1)!,/Usage:/);
   await h.commands.get('omniroute-last').handler('',h.ctx);assert.match(h.notices.at(-1)!,/No inspected/);
+});
+test('manual refresh respects a newer or cleared selection despite a command model snapshot',async()=>{
+  for(const selection of [{provider:'omniroute',id:'b'},{provider:'another',id:'b'},undefined]) {
+    const {promise:started,resolve:entered}=Promise.withResolvers<void>();
+    const {promise:gate,resolve:release}=Promise.withResolvers<void>();
+    const h=harness(async()=>{entered();await gate;return Response.json({data:[{id:'a'}]});});
+    await h.install();h.ctx.model={provider:'omniroute',id:'a',api:'openai-completions'};
+    const commandCtx={...h.ctx};
+    const refreshing=h.commands.get('omniroute-refresh').handler('',commandCtx);
+    await started;h.ctx.model=selection;release();await refreshing;
+    assert.equal(h.ctx.model,selection);assert.deepEqual(h.selections,[]);
+  }
+});
+test('a busy refresh applies changed metadata on becoming idle without another discovery',async()=>{
+  let rate=1;let requests=0;let idle=true;
+  const h=harness(async()=>{requests++;return Response.json({data:[{id:'m',pricing:{input:rate,output:2}}]});});
+  h.ctx.isIdle=()=>idle;
+  await h.install();await h.handlers.get('session_start')!({},h.ctx);
+  h.ctx.model=structuredClone(h.registry[0]);rate=3;idle=false;
+  await h.timers[0]();
+  assert.equal(h.ctx.model.cost.input,1);assert.equal(h.timeouts.size,1);assert.equal(requests,2);
+  await [...h.timeouts.values()][0]();
+  assert.equal(h.ctx.model.cost.input,1);assert.equal(h.timeouts.size,1);
+  idle=true;await [...h.timeouts.values()][0]();
+  assert.equal(h.ctx.model.cost.input,3);assert.equal(h.selections.length,1);
+  assert.equal(requests,2);assert.equal(h.timeouts.size,0);
+  await h.timers[0]();assert.equal(h.selections.length,1);
+  await h.handlers.get('session_shutdown')!({},h.ctx);
+});
+test('deferred rebinds stop after selection changes, discovery failure, or session shutdown',async()=>{
+  for(const stop of ['selection','failure','shutdown']) {
+    let rate=1;let fail=false;let idle=true;
+    const h=harness(async()=>fail?new Response('',{status:503}):Response.json({data:[{id:'m',pricing:{input:rate,output:2}}]}));
+    h.ctx.isIdle=()=>idle;
+    await h.install();await h.handlers.get('session_start')!({},h.ctx);
+    h.ctx.model=structuredClone(h.registry[0]);rate=3;idle=false;await h.timers[0]();
+    const queued=[...h.timeouts.values()][0];
+    if(stop==='selection')h.ctx.model={provider:'omniroute',id:'new-selection'};
+    if(stop==='failure'){fail=true;await h.timers[0]();assert.equal(h.timeouts.size,0);}
+    if(stop==='shutdown'){await h.handlers.get('session_shutdown')!({},h.ctx);assert.equal(h.timeouts.size,0);}
+    const selected=h.ctx.model;idle=true;await queued();
+    assert.equal(h.ctx.model,selected);assert.deepEqual(h.selections,[]);assert.equal(h.timeouts.size,0);
+    if(stop!=='shutdown')await h.handlers.get('session_shutdown')!({},h.ctx);
+  }
+});
+test('model inspection explains skipped IDs, fallback limits, and qualified selectors',async()=>{
+  const h=harness(async()=>Response.json({data:[{id:'vendor/chat'},{id:'vendor/no-tools',capabilities:{tool_calling:false}},{id:'omniroute/vendor/chat',context_length:9000,max_output_tokens:1000}]}));
+  await h.install();await h.handlers.get('session_start')!({},h.ctx);
+  const inspect=h.commands.get('omniroute-model');
+  await inspect.handler('omniroute/vendor/no-tools',h.ctx);
+  const skipped=JSON.parse(h.notices.at(-1)!);
+  assert.equal(skipped.id,'vendor/no-tools');assert.equal(skipped.accepted,false);
+  assert.deepEqual(skipped.rejections.map((r:any)=>r.reason),['tools-required']);
+  await inspect.handler('vendor/chat',h.ctx);
+  const accepted=JSON.parse(h.notices.at(-1)!);
+  assert.equal(accepted.accepted,true);assert.deepEqual(accepted.defaultsUsed,['context_length=8192','max_output_tokens=2048']);
+  assert.match(accepted.guidance,/OMNIROUTE_OVERRIDES_FILE/);
+  await inspect.handler('omniroute/vendor/chat',h.ctx);
+  assert.equal(JSON.parse(h.notices.at(-1)!).id,'omniroute/vendor/chat');
+  await h.commands.get('omniroute-status').handler('',h.ctx);
+  assert.match(h.notices.at(-1)!,/tools-required: 1/);assert.match(h.notices.at(-1)!,/chat: 1 context, 1 output/);
+  await h.handlers.get('session_shutdown')!({},h.ctx);
 });

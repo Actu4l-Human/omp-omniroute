@@ -1,5 +1,5 @@
 import type { ExtensionAPI, ExtensionContext, ProviderConfig } from '@oh-my-pi/pi-coding-agent';
-import { PROVIDER, readConfig, fetchCatalog, mapCatalog, type Catalog, type Config } from './catalog.ts';
+import { PROVIDER, readConfig, fetchCatalog, mapCatalog, type Catalog, type CatalogSkipReason, type Config } from './catalog.ts';
 import {loadOverrides} from './overrides.ts';
 import {diffCatalog,type CatalogDiff} from './changes.ts';
 import {createUsageProvider,fetchUsageSnapshot} from './usage.ts';
@@ -20,7 +20,7 @@ export async function installOmniRoute(pi: ExtensionAPI, env: Record<string,stri
     if(typeof pi.registerCommand==='function')pi.registerCommand('omniroute-doctor',{description:'Explain invalid OmniRoute configuration',handler:async(_args,ctx)=>{ctx.ui.notify(`OmniRoute configuration error: ${message}`,'error');}});
     return;
   }
-  let catalog: Catalog={models:[],metadata:new Map(),skipped:0};
+  let catalog: Catalog=mapCatalog({data:[]},config);
   let lastSuccess: number|undefined; let lastError: string|undefined;
   let alertBaseline:Catalog|undefined;let lastChanges:{at:string;changes:CatalogDiff}|undefined;
   let lastRequest:RequestRecord|undefined;let sessionId:string=randomUUID();
@@ -29,6 +29,8 @@ export async function installOmniRoute(pi: ExtensionAPI, env: Record<string,stri
     ctx.ui.notify(env.OMNIROUTE_API_KEY?message.split(env.OMNIROUTE_API_KEY).join('[redacted]'):message,type);
   };
   let pending: Promise<void>|undefined;
+  let pendingGeneration=0;let sessionGeneration=0;
+  let cancelIdleRebind:(()=>void)|undefined;
   let timer: ReturnType<ExtensionContext['setInterval']>|undefined;
   let timerContext: ExtensionContext|undefined;
   const registration: ProviderConfig={
@@ -58,21 +60,55 @@ export async function installOmniRoute(pi: ExtensionAPI, env: Record<string,stri
   }
   pi.registerProvider(PROVIDER,registration);
 
-  const summary=()=>`${catalog.models.length} model(s), ${catalog.skipped} skipped. Last success: ${lastSuccess?new Date(lastSuccess).toISOString():'not fetched in this session'}. ${lastError?`Refresh failed: ${lastError}. Retaining last successful catalog.`:'Catalog costs are estimates; unknown/variable costs are not free.'}`;
+  const summary=()=>{
+    const skipped=Object.entries(catalog.diagnostics.skippedByReason).filter(([,count])=>count>0).map(([reason,count])=>`${reason}: ${count}`).join(', ');
+    const fallbacks=Object.entries(catalog.diagnostics.fallbacks).filter(([,counts])=>counts.contextWindow || counts.maxTokens)
+      .map(([kind,counts])=>`${kind}: ${counts.contextWindow} context, ${counts.maxTokens} output`).join('; ');
+    return `${catalog.models.length} model(s), ${catalog.skipped} skipped${skipped?` (${skipped})`:''}. Last success: ${lastSuccess?new Date(lastSuccess).toISOString():'not fetched in this session'}. ${lastError?`Refresh failed: ${lastError}. Retaining last successful catalog.`:'Catalog costs are estimates; unknown/variable costs are not free.'}${fallbacks?` Fallback limits (${fallbacks}). Use /omniroute-model <id> and exact-ID overrides to supply verified limits.`:''}`;
+  };
+  function clearIdleRebind():void {
+    cancelIdleRebind?.();
+    cancelIdleRebind=undefined;
+  }
+  async function rebindSelected(ctx:ExtensionContext,id:string,generation:number):Promise<void> {
+    if(generation!==sessionGeneration || lastError)return;
+    // Command contexts snapshot ctx.model; the query facade reads the live selection.
+    const selected=ctx.models.current();
+    if(selected?.provider!==PROVIDER || selected.id!==id)return;
+    const current=ctx.modelRegistry.find(PROVIDER,id);
+    if(!current || isDeepStrictEqual(current,selected))return;
+    if(!ctx.isIdle()) {
+      // agent_end can precede the host becoming idle. A managed timer also covers
+      // discovery completing during that unwind, without another catalog request.
+      const timer=ctx.setTimeout(()=>{
+        cancelIdleRebind=undefined;
+        return rebindSelected(ctx,id,generation);
+      },100);
+      cancelIdleRebind=()=>ctx.clearTimer(timer);
+      return;
+    }
+    await pi.setModel(current);
+  }
   async function refresh(ctx: ExtensionContext): Promise<void> {
-    if (pending) return pending;
+    const generation=sessionGeneration;
+    if (pending) {
+      const sameSession=pendingGeneration===generation;
+      await pending;
+      if(!sameSession && generation===sessionGeneration)await refresh(ctx);
+      return;
+    }
+    pendingGeneration=generation;
     pending=(async()=>{
       try {
         if (typeof ctx.modelRegistry.refreshDiscoverableProviders !== 'function') throw new Error('This extension requires OMP 18.18.1 or later');
         await ctx.modelRegistry.refreshDiscoverableProviders([PROVIDER],'online');
-        // OMP can select a persisted model before session_start. Rebind the same
-        // ID after successful discovery so updated API/capabilities/prices apply.
-        // Never change the selection in the middle of a streamed turn.
-        if (!lastError && ctx.model?.provider===PROVIDER && ctx.isIdle()) {
-          const current=ctx.modelRegistry.find(PROVIDER,ctx.model.id);
-          if (current && !isDeepStrictEqual(current,ctx.model)) await pi.setModel(current);
-        }
+        if(generation!==sessionGeneration)return;
+        clearIdleRebind();
+        const selected=ctx.models.current();
+        if(!lastError && selected?.provider===PROVIDER)await rebindSelected(ctx,selected.id,generation);
       } catch(error) {lastError=error instanceof Error?error.message:'OmniRoute refresh failed';}
+      if(generation!==sessionGeneration)return;
+      if(lastError)clearIdleRebind();
       if(!lastError) {
         const changes=diffCatalog(alertBaseline,catalog);alertBaseline=catalog;
         if(changes) {
@@ -85,6 +121,7 @@ export async function installOmniRoute(pi: ExtensionAPI, env: Record<string,stri
     try {await pending;} finally {pending=undefined;}
   }
   pi.on('session_start',async(_event,ctx)=>{
+    sessionGeneration++;clearIdleRebind();
     if (timer!==undefined && timerContext) timerContext.clearTimer(timer);
     timerContext=ctx;
     sessionId=ctx.sessionManager?.getSessionId?.()??randomUUID();
@@ -95,6 +132,7 @@ export async function installOmniRoute(pi: ExtensionAPI, env: Record<string,stri
     if (lastError) ctx.ui.notify(summary(),'warning');
   });
   pi.on('session_shutdown',()=>{
+    sessionGeneration++;clearIdleRebind();
     if (timer!==undefined && timerContext) timerContext.clearTimer(timer);
     timer=undefined;timerContext=undefined;
   });
@@ -117,8 +155,19 @@ export async function installOmniRoute(pi: ExtensionAPI, env: Record<string,stri
   pi.registerCommand('omniroute-changes',{description:'Show the latest meaningful catalog change',handler:async(_args,ctx)=>{
     show(ctx,lastChanges??'No catalog changes observed after the initial successful discovery.');
   }});
-  pi.registerCommand('omniroute-controls',{description:'Show or change session-local inspection, sticky and bypass controls',handler:async(args,ctx)=>{
-    const controls={'sticky':'stickySessions','cache-bypass':'bypassCache','memory-bypass':'bypassMemory','inspect':'inspectRequests','alerts':'catalogAlerts'} as const;
+  const controls={'sticky':'stickySessions','cache-bypass':'bypassCache','memory-bypass':'bypassMemory','inspect':'inspectRequests','alerts':'catalogAlerts'} as const;
+  const skipDescriptions:Record<CatalogSkipReason,string>={
+    invalid:'Invalid catalog row or model ID',duplicate:'Duplicate model ID',
+    include:'Does not match OMNIROUTE_INCLUDE',exclude:'Matches OMNIROUTE_EXCLUDE',
+    'unsupported-type':'Model type has no supported OMP transport','tools-required':'Tool calling is explicitly disabled while OMNIROUTE_REQUIRE_TOOLS is true',
+    'unsupported-input':'No supported text or image input modality',
+  };
+  pi.registerCommand('omniroute-controls',{description:'Show or change session-local inspection, sticky and bypass controls',
+    getArgumentCompletions:prefix=>{
+      const choices=Object.keys(controls).flatMap(control=>[`${control} on`,`${control} off`]);
+      const matches=choices.filter(value=>value.startsWith(prefix.trimStart())).map(value=>({value,label:value}));
+      return matches.length?matches:null;
+    },handler:async(args,ctx)=>{
     const parts=args.trim().split(/\s+/).filter(Boolean);
     if(parts.length) {
       if(parts.length!==2 || !Object.hasOwn(controls,parts[0]) || !['on','off'].includes(parts[1])) {show(ctx,'Usage: /omniroute-controls [sticky|cache-bypass|memory-bypass|inspect|alerts] [on|off]','warning');return;}
@@ -128,9 +177,24 @@ export async function installOmniRoute(pi: ExtensionAPI, env: Record<string,stri
     }
     show(ctx,{stickySessions:config.stickySessions,bypassCache:config.bypassCache,bypassMemory:config.bypassMemory,inspectRequests:config.inspectRequests,catalogAlerts:config.catalogAlerts,scope:'Chat requests in this OMP process only; environment defaults return on reload.',...(lastError?{warning:'Discovery failed; native cached models may not use new controls until a successful refresh.'}:{})});
   }});
-  pi.registerCommand('omniroute-model',{description:'Inspect retained OmniRoute metadata: /omniroute-model <exact model id>',handler:async(args,ctx)=>{
-    const id=args.trim();const details=catalog.metadata.get(id);
-    ctx.ui.notify(details?JSON.stringify({id,...details},null,2):'No metadata for that ID in the last successful discovery. Use /omniroute-refresh, then pass the exact gateway model ID.',details?'info':'warning');
-  }});
+  pi.registerCommand('omniroute-model',{description:'Inspect accepted or skipped metadata: /omniroute-model <model id or provider/id>',
+    getArgumentCompletions:prefix=>{
+      const query=prefix.trimStart();
+      const ids=new Set([...catalog.metadata.keys(),...catalog.rejections.keys()]);
+      const matches=[...ids].flatMap(id=>{
+        const value=id.startsWith(query)?id:`${PROVIDER}/${id}`;
+        if(value!==id && ids.has(value))return [];
+        return value.startsWith(query)?[{value,label:value,description:catalog.metadata.has(id)?'Accepted model':`Skipped: ${catalog.rejections.get(id)!.map(reason=>skipDescriptions[reason]).join('; ')}`}]:[];
+      });
+      return matches.length?matches:null;
+    },handler:async(args,ctx)=>{
+      const input=args.trim();
+      // Exact gateway IDs win when an ID itself begins with "omniroute/".
+      const id=catalog.metadata.has(input) || catalog.rejections.has(input)?input:input.startsWith(`${PROVIDER}/`)?input.slice(PROVIDER.length+1):input;
+      const details=catalog.metadata.get(id);const reasons=catalog.rejections.get(id);
+      if(details || reasons)show(ctx,{id,accepted:!!details,...details,...(reasons?{rejections:reasons.map(reason=>({reason,message:skipDescriptions[reason]}))}:{}),
+        ...(details?.defaultsUsed.length?{guidance:'Set verified context_length/max_output_tokens in OMNIROUTE_OVERRIDES_FILE under this exact gateway ID, then /omniroute-refresh.'}:{})},details?'info':'warning');
+      else show(ctx,'No metadata for that ID in the last successful discovery. Use /omniroute-refresh, then pass the exact gateway model ID or omniroute/<gateway ID>.','warning');
+    }});
 }
 export default function omniroute(pi: ExtensionAPI): Promise<void> {return installOmniRoute(pi);}

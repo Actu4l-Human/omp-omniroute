@@ -44,7 +44,7 @@ $env:OMNIROUTE_API_KEY = Read-Host 'OmniRoute API key' -MaskInput
 omp models omniroute --kind all --json --no-extensions -e "$HOME/omp-extensions/omp-omniroute/index.ts"
 ```
 
-These prompts keep the key out of shell history, but OMP still receives it in its process environment. Use your secret manager for persistence. The extension does not source `.env` or [.env.example](.env.example). An absent or invalid key disables provider registration.
+These prompts keep the key out of shell history, but OMP still receives it in its process environment. Use your secret manager for persistence. The extension does not source dotenv files itself; OMP can load the active profile's `agent/.env`, but an existing nonempty process variable takes precedence. [.env.example](.env.example) is not loaded automatically. See [profile environment precedence](docs/configuration.md#environment). An absent or invalid key disables provider registration.
 
 ### Automatic loading
 
@@ -69,7 +69,7 @@ In the session:
 /omniroute-refresh
 ```
 
-Doctor performs authenticated **GETs only**. A missing deployment-version header is informational, and a healthy response does not prove inference availability. Use `/omniroute-model` followed by an exact gateway ID to inspect mapping decisions. `/omniroute-usage` requires the key's optional `allowUsageCommand` permission.
+Doctor performs authenticated **GETs only** and reports exact-ID health coverage; missing observations do not mean unhealthy models. A missing deployment-version header is informational, and a healthy response does not prove inference availability. `/omniroute-status` summarizes skipped-model reasons and fallback limits. Use `/omniroute-model` with a gateway ID or copied selector to inspect accepted or skipped models; Tab completes IDs and request controls. `/omniroute-usage` requires the key's optional `allowUsageCommand` permission.
 
 ## Self-hosted gateway requirements
 

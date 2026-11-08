@@ -4,7 +4,9 @@
 
 ## Environment
 
-Settings are read from the OMP process environment at extension load. Restart/reload after changing them. Neither `.env` nor [.env.example](../.env.example) is automatically sourced. `/omniroute-controls` changes only the listed process-local settings; an override file is reread on discovery attempts.
+Settings are read from the OMP process environment at extension load. Restart/reload after changing them. The extension does not load dotenv files itself, and [.env.example](../.env.example) is never loaded automatically. **OMP does load dotenv settings**, including the active profile's `agent/.env`; for a named profile the default path is `~/.omp/profiles/<name>/agent/.env`.
+
+Existing nonempty process variables take precedence over OMP's dotenv loader. OMP checks project, active agent/profile, configuration-root, then home `.env` values for unset variables; Bun may already have loaded project dotenv values before OMP starts. A stale exported `OMNIROUTE_API_KEY` can therefore override the key in a named profile. Check the launching shell's environment without printing credentials, clear unintended overrides there, and launch with `omp --profile <name>`. The extension does not modify these sources. `/omniroute-controls` changes only the listed process-local settings; an override file is reread on discovery attempts.
 
 | Variable | Default | Meaning |
 | --- | --- | --- |
@@ -34,8 +36,8 @@ HTTPS is recommended. URLs with embedded credentials, query parameters, or fragm
 | Command | Effect |
 | --- | --- |
 | `/omniroute-refresh` | Force online discovery for this provider only |
-| `/omniroute-status` | Show last refresh, accepted/skipped counts, errors, and pricing caveats |
-| `/omniroute-model <exact gateway model ID>` | Show original metadata, applied overrides, and mapping decisions |
+| `/omniroute-status` | Show last refresh, accepted/skipped counts by reason, fallback limits by model kind, errors, and pricing caveats |
+| `/omniroute-model <ID or selector>` | Show accepted-model metadata and override guidance, or explain why the exact gateway ID was skipped |
 | `/omniroute-usage` | Fetch key-scoped usage and provider quota snapshots |
 | `/omniroute-doctor` | Read-only endpoint, authentication, catalog, version-header, and optional health checks |
 | `/omniroute-last` | Show the last inspected chat request's routing/cost metadata |
@@ -44,9 +46,11 @@ HTTPS is recommended. URLs with embedded credentials, query parameters, or fragm
 
 Controls are `sticky`, `cache-bypass`, `memory-bypass`, `inspect`, and `alerts`. Change them when the current turn is idle. Transport-affecting controls trigger discovery; changes apply to subsequent requests, not an active stream. Environment defaults return on reload.
 
+Tab completion supplies control names with `on`/`off`, and known accepted or rejected model IDs. `/omniroute-model` accepts either a raw gateway ID or a copied `omniroute/<gateway ID>` selector. Exact gateway IDs take precedence if an ID itself starts with `omniroute/`; use the raw ID to resolve an ambiguous selector.
+
 Startup and periodic refreshes use OMP's scoped discovery API. Concurrent refreshes are coalesced, shutdown clears timers, and failures retain the last successful catalog. The extension contacts only the configured gateway, not an external metadata service.
 
-After successful discovery, an idle session rebinds its selected OmniRoute model only when the model configuration differs, including transport, capabilities, or prices. Structurally unchanged refreshes do not trigger model selection; busy sessions and failed refreshes never rebind.
+After successful discovery, an idle session rebinds its selected OmniRoute model only when the model configuration differs, including transport, capabilities, or prices. Refresh reads the live selection after discovery, so a manual refresh does not restore a model you switched away from while waiting. Structurally unchanged refreshes do not trigger model selection. If the session is busy, a managed idle check applies the pending metadata without another catalog request; it never rebinds during a stream. A changed selection, failed refresh, or shutdown cancels that pending rebind.
 
 ## Catalog-to-OMP mapping
 
@@ -67,7 +71,9 @@ After successful discovery, an idle session rebinds its selected OmniRoute model
 
 Missing limits use 8192 context tokens and 2048 output tokens, recorded in `defaultsUsed`; these are placeholders, not model-specific guarantees. Missing/empty effort tiers do not invent a reasoning dial. Unsupported effort names and unknown fields remain in the raw metadata. Image and embedding models have their own roles, not chat-picker entries.
 
-The last successful raw rows and mapping metadata are kept in memory for `/omniroute-model`. OMP's public model schema cannot preserve arbitrary custom fields. This metadata is unavailable after restart until successful discovery.
+The last successful accepted rows and mapping metadata are kept in memory for `/omniroute-model`. Rejected valid IDs retain rejection reasons, not their raw payloads. `/omniroute-status` counts malformed rows/IDs, accepted-ID duplicates, include/exclude filtering, unsupported types/inputs, and explicit lack of required tools. Each skipped row counts under its first rejection; one ID can accumulate distinct reasons, including a discarded duplicate after an accepted row. Malformed IDs contribute only to counts.
+
+Fallback context/output counts are grouped by chat, embedding, and image kind. They count missing or invalid limits, not explicit limits or output clamping. Inspect a model's `defaultsUsed`, then supply verified `context_length`/`max_output_tokens` through an [exact-ID override](#exact-id-overrides). OMP's public model schema cannot preserve arbitrary custom fields; these diagnostics are process-local, unavailable after restart until discovery succeeds, and retained on discovery failure.
 
 ## Pricing and reported costs
 
@@ -137,7 +143,9 @@ Overrides apply before capability filtering. Explicit reasoning/vision overrides
 
 The native usage adapter and `/omniroute-usage` read `/api/usage/om-usage?format=json` on the same gateway. The key needs optional **allowUsageCommand**, off by default. HTTP 403 is reported clearly; the extension never grants permission or asks for management credentials.
 
-Personal daily/weekly amounts use USD. Provider quotas are raw cached upstream snapshots, not cutoff-adjusted usable allowance. Missing, empty, or refused data is not zero; gateway tracking is not a settled provider bill.
+Personal daily/weekly amounts use USD. When both spending and a positive limit are known, the adapter supplies remaining allowance and bounded fractions for native usage bars. Missing spending/limits remain unknown; zero limits are not divided by. Explicit provider `usedPercentage` values above 100 remain visible and report exhausted, while normalized fractions cap at 1. Invalid remaining percentages and bare counters without interpretable units remain unknown.
+
+Provider quotas are raw cached upstream snapshots, not cutoff-adjusted usable allowance. Missing, empty, or refused data is not zero; gateway tracking is not a settled provider bill.
 
 For a configured API path `/prefix/v1`, inference/catalog routes stay under `/prefix/v1/*`, but usage resolves to `/prefix/api/usage/om-usage?format=json`. Forward that sibling path separately. Preserve `Authorization` and SSE through the proxy; do not redirect API traffic to a dashboard login. No alternate usage-origin setting is needed or provided.
 
@@ -147,7 +155,9 @@ Doctor validates the configured endpoint, GETs `/v1/models`, and optionally GETs
 
 An absent `x-omniroute-version` produces an informational `ok` check with no `version` value. A present bounded semantic version is reported; malformed or empty values warn without echoing their contents. `X-Model-Catalog-Version`, such as `model-metadata-v1:static`, identifies the metadata schema, **not the deployed server release**.
 
-Health states other than `ok` warn. Unknown states normalize to `unknown`; unsupported health endpoints warn without invalidating successful catalog authentication. `ok` means no pause observed by that instance, not guaranteed upstream availability; connection-level pauses may be absent.
+Health states other than `ok` warn. Unknown states normalize to `unknown`; unsupported health endpoints and empty observations warn without invalidating successful catalog authentication. `health.coverage` reports unique raw-catalog IDs (`catalog`), the exact-ID intersection (`matched`), catalog IDs without observations (`unobserved`), and health IDs outside that catalog (`healthOnly`). These counts are independent of local model filters; row totals/state counts can include duplicates.
+
+Partial or disjoint coverage is informational: unobserved IDs are not evidence of unhealthy models. `ok` describes only the returned observations and means no pause observed by that instance, not guaranteed upstream availability; connection-level pauses may be absent.
 
 ## Inspector, alerts, and request controls
 
@@ -178,9 +188,9 @@ OMP 18.18.1 caches extension catalogs by provider name without an extension conf
 | Symptom | Check |
 | --- | --- |
 | No provider/models | Process environment, root entry point, `/omniroute-doctor`, then `/omniroute-status`; do not assume `.env` was loaded |
-| Authentication failure or redirect | Inference API key, proxy `Authorization` forwarding, non-dashboard API URL |
+| Authentication failure or redirect | Inference API key, unintended inherited environment overriding profile dotenv, proxy `Authorization` forwarding, non-dashboard API URL |
 | Old filters/prices/transports | Successful online refresh; cached listing alone is insufficient |
-| Models skipped | Include/exclude globs, explicit lack of tools, unsupported type/input, malformed/duplicate IDs |
+| Models skipped | `/omniroute-status` reason counts, then `/omniroute-model <ID>` for the retained rejection reason |
 | Incorrect limits/capabilities | `/omniroute-model` fallback metadata, gateway metadata, then exact-ID overrides |
 | Usage 403 | Operator-controlled `allowUsageCommand` permission; inference does not require it |
 | Usage 404 behind a prefix | Separate forwarding for the sibling `/api/usage/om-usage` route |

@@ -29,10 +29,16 @@ export interface ModelMetadata {
 }
 // The current OMP runtime accepts supportsTools; its public extension type omits it.
 export type OmniRouteModel = ProviderModelConfig & {supportsTools?: boolean};
+export type CatalogSkipReason = 'invalid' | 'duplicate' | 'include' | 'exclude' | 'unsupported-type' | 'tools-required' | 'unsupported-input';
 export interface Catalog {
   models: OmniRouteModel[];
   metadata: Map<string, ModelMetadata>;
   skipped: number;
+  rejections: Map<string, CatalogSkipReason[]>;
+  diagnostics: {
+    skippedByReason: Record<CatalogSkipReason, number>;
+    fallbacks: Record<'chat' | 'embedding' | 'image', {contextWindow: number; maxTokens: number}>;
+  };
 }
 const MAX_BODY_BYTES = 5 * 1024 * 1024;
 const EFFORTS = ['minimal', 'low', 'medium', 'high', 'xhigh', 'max'];
@@ -106,19 +112,39 @@ export function mapCatalog(payload: unknown, config: Config, overrides:ModelOver
   const include=config.include.map(compileGlob), exclude=config.exclude.map(compileGlob), variablePrice=config.variablePrice.map(compileGlob);
   const models: OmniRouteModel[] = [];
   const metadata = new Map<string, ModelMetadata>();
+  const rejections = new Map<string, CatalogSkipReason[]>();
+  const diagnostics: Catalog['diagnostics'] = {
+    skippedByReason: {invalid:0,duplicate:0,include:0,exclude:0,'unsupported-type':0,'tools-required':0,'unsupported-input':0},
+    fallbacks: {
+      chat: {contextWindow:0,maxTokens:0},
+      embedding: {contextWindow:0,maxTokens:0},
+      image: {contextWindow:0,maxTokens:0},
+    },
+  };
   let skipped = 0;
+  const reject = (reason: CatalogSkipReason, id?: string) => {
+    skipped++;
+    diagnostics.skippedByReason[reason]++;
+    if (id !== undefined) {
+      const reasons = rejections.get(id);
+      if (!reasons) rejections.set(id, [reason]);
+      else if (!reasons.includes(reason)) reasons.push(reason);
+    }
+  };
   for (const candidate of envelope.data) {
     const original = record(candidate);
     const id = original?.id;
     const {effective:row,applied}=original?applyOverridesToRow(original,overrides):{effective:undefined,applied:undefined};
-    if (!row || typeof id !== 'string' || !id || id.length > 512 || /[\x00-\x1f\x7f]/.test(id) || metadata.has(id)) { skipped++; continue; }
-    if ((include.length > 0 && !include.some(pattern => pattern.test(id))) || exclude.some(pattern => pattern.test(id))) { skipped++; continue; }
+    if (!row || typeof id !== 'string' || !id || id.length > 512 || /[\x00-\x1f\x7f]/.test(id)) { reject('invalid'); continue; }
+    if (metadata.has(id)) { reject('duplicate', id); continue; }
+    if (include.length > 0 && !include.some(pattern => pattern.test(id))) { reject('include', id); continue; }
+    if (exclude.some(pattern => pattern.test(id))) { reject('exclude', id); continue; }
     const type = typeof row.type === 'string' ? row.type.toLowerCase() : 'chat';
     const kind = type === 'embedding' ? 'embedding' : type === 'image' ? 'image' : type === 'chat' || type === 'text' || type === 'completion' ? 'chat' : undefined;
-    if (!kind) { skipped++; continue; }
+    if (!kind) { reject('unsupported-type', id); continue; }
     const caps = record(row.capabilities) ?? {};
     const tools = typeof caps.tool_calling === 'boolean' ? caps.tool_calling : null;
-    if (kind === 'chat' && config.requireTools && tools === false) { skipped++; continue; }
+    if (kind === 'chat' && config.requireTools && tools === false) { reject('tools-required', id); continue; }
     const tiers = Array.isArray(caps.effort_tiers) ? caps.effort_tiers : Array.isArray(row.effort_tiers) ? row.effort_tiers : [];
     const efforts = EFFORTS.filter(e => tiers.includes(e)) as Effort[];
     const overrideCaps=applied?.capabilities;
@@ -131,7 +157,7 @@ export function mapCatalog(payload: unknown, config: Config, overrides:ModelOver
       if (!overrideCaps.vision && input.includes('image'))input.splice(input.indexOf('image'),1);
     }
     // An audio-only input model cannot be driven by these OMP runners.
-    if (input.length === 0) { skipped++; continue; }
+    if (input.length === 0) { reject('unsupported-input', id); continue; }
     const pricing = record(row.pricing) ?? {};
     const rates = {
       input: price(pricing, 'input', 'prompt'), output: price(pricing, 'output', 'completion'),
@@ -143,8 +169,8 @@ export function mapCatalog(payload: unknown, config: Config, overrides:ModelOver
       variable && applied?.pricingStatus!=='estimated' ? 'variable' : rates.input===undefined || rates.output===undefined ? 'unknown' : 'estimated';
     const unpriced=pricingStatus!=='estimated';
     const defaultsUsed: string[] = [];
-    const contextWindow = positiveInt(row.context_length) ?? (defaultsUsed.push('context_length=8192'), 8192);
-    const maxTokens = Math.min(positiveInt(row.max_output_tokens) ?? (defaultsUsed.push('max_output_tokens=2048'), 2048), contextWindow);
+    const contextWindow = positiveInt(row.context_length) ?? (defaultsUsed.push('context_length=8192'), diagnostics.fallbacks[kind].contextWindow++, 8192);
+    const maxTokens = Math.min(positiveInt(row.max_output_tokens) ?? (defaultsUsed.push('max_output_tokens=2048'), diagnostics.fallbacks[kind].maxTokens++, 2048), contextWindow);
     const rawName = typeof row.name === 'string' && row.name.trim() ? row.name.replace(/[\x00-\x1f\x7f]/g,'').slice(0,240) : id;
     const name = pricingStatus === 'estimated' ? rawName : `${rawName} [price ${pricingStatus}]`;
     models.push({
@@ -162,7 +188,7 @@ export function mapCatalog(payload: unknown, config: Config, overrides:ModelOver
     });
     metadata.set(id, {raw:structuredClone(original!),...(applied?{appliedOverrides:applied}:{}),tools,pricingStatus,missingPriceFields,defaultsUsed});
   }
-  return {models, metadata, skipped};
+  return {models, metadata, skipped, rejections, diagnostics};
 }
 export async function fetchCatalog(config: Config, key?: string, fetchImpl: typeof fetch = fetch): Promise<{data: unknown[]}> {
   if (!key || key === 'OMNIROUTE_API_KEY' || /[\r\n]/.test(key)) throw new Error('Set a valid OMNIROUTE_API_KEY before starting OMP');

@@ -2,6 +2,8 @@ import { mkdtemp, rm, mkdir, copyFile, cp, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 import assert from 'node:assert/strict';
+const externalCli=process.env.OMNIROUTE_SMOKE_CLI;
+const cliCommand=externalCli?[Bun.which(externalCli)??resolve(externalCli)]:[process.execPath,resolve('node_modules/@oh-my-pi/pi-coding-agent/dist/cli.js')];
 const root=await mkdtemp(join(tmpdir(),'omp-omniroute-smoke-'));
 const calls:string[]=[];const requestHeaders:Headers[]=[];let failModels=false;
 const fixturePath=join(root,'tool-fixture.txt');const marker='OMNIROUTE_TOOL_FIXTURE_7b42';
@@ -65,8 +67,8 @@ const server=Bun.serve({port:0,hostname:'127.0.0.1',fetch:async(request)=>{
   return new Response('Not found',{status:404});
 }});
 async function run(args:string[], reported:boolean,extraEnv:Record<string,string>={}) {
-  const proc=Bun.spawn([process.execPath,resolve('node_modules/@oh-my-pi/pi-coding-agent/dist/cli.js'),...args],{
-    cwd:root,env:{PATH:process.env.PATH??'',HOME:root,PI_CODING_AGENT_DIR:join(root,'agent'),
+  const proc=Bun.spawn([...cliCommand,...args],{
+    cwd:root,env:{PATH:process.env.PATH??'',HOME:root,USERPROFILE:root,PI_CODING_AGENT_DIR:join(root,'agent'),
       OMNIROUTE_BASE_URL:`http://127.0.0.1:${server.port}/v1`,OMNIROUTE_API_KEY:'fixture-key',OMNIROUTE_REPORTED_COST:String(reported),OMNIROUTE_INSPECT_REQUESTS:String(reported),...extraEnv,NO_COLOR:'1',TERM:'dumb',CI:'1'},
     stdout:'pipe',stderr:'pipe',timeout:45000,
   });
@@ -89,6 +91,12 @@ try {
     {id:'fixture-chat',kind:'chat'},{id:'fixture-embedding',kind:'embedding'},{id:'fixture-image',kind:'image'},
   ]);
   console.log('Automatic directory discovery in a fresh profile:',JSON.stringify(discovered));
+  const usage=record(JSON.parse(await run(['usage','--provider','omniroute','--json'],false)));
+  const reports=records(usage.reports);assert.equal(reports.length,1);
+  const personal=records(reports[0].limits).find(limit=>limit.id==='personal:daily');
+  assert.ok(personal);
+  assert.equal(record(personal.amount).usedFraction,.25);assert.equal(record(personal.amount).remaining,3.75);
+  console.log('Actual CLI personal usage fractions and remaining allowance: passed');
   await writeFile(fixturePath,marker,'utf8');
   for(const reported of [false,true]) {
     const models=JSON.parse(await run(['models','omniroute','--kind','all','--json','--no-extensions','-e',extension],reported));
