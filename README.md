@@ -4,7 +4,7 @@ Use a self-hosted OmniRoute gateway as an **extension-registered `omniroute` pro
 
 The compatibility baseline is **OMP 18.18.1** and **OmniRoute v3.8.53**. The inspected `release/v3.8.54` development revision shares the reviewed metadata, pricing, health, and usage contracts; it is not the latest published release in this review. See [source revisions and verification limits](docs/compatibility.md).
 
-Package version: **1.1.0**. <!-- x-release-please-version -->
+Package version: **1.2.0**. <!-- x-release-please-version -->
 
 ## GitHub Packages
 
