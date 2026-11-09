@@ -16,6 +16,13 @@
 - Adopt AGPL-3.0-or-later with the license included in release packages.
 - Document dependency-license obligations, native image-download and pricing limitations, and supported development Node versions.
 
+## [1.4.2](https://github.com/Actu4l-Human/omp-omniroute/compare/v1.4.1...v1.4.2) (2026-11-09)
+
+
+### Bug Fixes
+
+* hardened catalog, usage, and Bun test isolation ([e894d7d](https://github.com/Actu4l-Human/omp-omniroute/commit/e894d7d2744b6ccb1a862a1fb74d5d3fb8330704))
+
 ## [1.4.1](https://github.com/Actu4l-Human/omp-omniroute/compare/v1.4.0...v1.4.1) (2026-11-08)
 
 
