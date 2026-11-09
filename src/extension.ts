@@ -1,4 +1,5 @@
 import type { ExtensionAPI, ExtensionContext, ProviderConfig } from '@oh-my-pi/pi-coding-agent';
+import type {Model} from '@oh-my-pi/pi-ai';
 import { PROVIDER, readConfig, fetchCatalog, mapCatalog, type Catalog, type CatalogSkipReason, type Config } from './catalog.ts';
 import {loadOverrides} from './overrides.ts';
 import {diffCatalog,type CatalogDiff} from './changes.ts';
@@ -7,6 +8,15 @@ import {runDoctor} from './doctor.ts';
 import type {RequestRecord} from './telemetry.ts';
 import {randomUUID} from 'node:crypto';
 import {isDeepStrictEqual} from 'node:util';
+
+function sameModelMetadata(current:Model,selected:Model):boolean {
+  if(current===selected)return true;
+  // OMP rebuilds opaque request-time resolvers on discovery; compare their presence, not closure identity.
+  if((current.resolveHeaders===undefined)!==(selected.resolveHeaders===undefined))return false;
+  const {resolveHeaders:_currentResolver,...currentData}=current;
+  const {resolveHeaders:_selectedResolver,...selectedData}=selected;
+  return isDeepStrictEqual(currentData,selectedData);
+}
 
 /** Runtime dependencies are injectable for offline verification; no credentials are persisted. */
 export async function installOmniRoute(pi: ExtensionAPI, env: Record<string,string|undefined> = process.env, fetchImpl: typeof fetch = fetch, adapter?: NonNullable<ProviderConfig['streamSimple']>): Promise<void> {
@@ -107,7 +117,7 @@ export async function installOmniRoute(pi: ExtensionAPI, env: Record<string,stri
     if(selected?.provider!==PROVIDER || selected.id!==id){updateStatus(ctx);return;}
     const current=ctx.modelRegistry.find(PROVIDER,id);
     if(!catalog.metadata.has(id) || !current){setModelUpdate(ctx,id,'missing');return;}
-    if(isDeepStrictEqual(current,selected)){modelUpdate=undefined;updateStatus(ctx);return;}
+    if(sameModelMetadata(current,selected)){modelUpdate=undefined;updateStatus(ctx);return;}
     if(!ctx.isIdle()) {
       setModelUpdate(ctx,id,'pending');
       // agent_end can precede the host becoming idle. A managed timer also covers

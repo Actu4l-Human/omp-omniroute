@@ -48,9 +48,11 @@ Controls are `sticky`, `cache-bypass`, `memory-bypass`, `inspect`, and `alerts`.
 
 Tab completion supplies control names with `on`/`off`, and known accepted or rejected model IDs. `/omniroute-model` accepts either a raw gateway ID or a copied `omniroute/<gateway ID>` selector. Exact gateway IDs take precedence if an ID itself starts with `omniroute/`; use the raw ID to resolve an ambiguous selector.
 
-Startup and periodic refreshes use OMP's scoped discovery API. Concurrent refreshes are coalesced, shutdown clears timers, and failures retain the last successful catalog. The extension contacts only the configured gateway, not an external metadata service.
+Startup and periodic refreshes use OMP's scoped discovery API. Concurrent refreshes are coalesced, shutdown clears timers, and failures retain the last successful catalog. Catalog and diagnostic GETs contact the configured gateway, not an external metadata service. Native image downloads have a separate trust boundary described below.
 
 After successful discovery, an idle session rebinds its selected OmniRoute model only when the model configuration differs, including transport, capabilities, or prices. Refresh reads the live selection after discovery, so it respects changes made during discovery. Structurally unchanged refreshes do not trigger model selection. If the session is busy, a managed idle check applies the pending metadata without another catalog request; it never rebinds during a stream. A changed selection, failed refresh, or shutdown cancels that pending rebind.
+
+OMP recreates request-time header resolver functions during discovery. Their object identity alone does not constitute a metadata change; resolver presence and all other exposed model fields, including static headers, still participate in comparison. Refresh does not execute resolvers merely to compare credentials.
 
 **Upstream limitation:** OMP 18.18.2's `setModel` awaits authentication before unconditionally replacing the selection. A user selection or session change during that authentication await can still be overwritten. The public API has no atomic conditional replacement; a post-call check cannot prevent it. Reliable remediation requires an upstream guard on both the expected current selection and session after authentication. The extension does not attempt restoration that could overwrite another newer choice.
 
@@ -63,7 +65,7 @@ When the selected model disappears or is filtered out, the extension warns but d
 | Gateway field | OMP interpretation |
 | --- | --- |
 | `id` | Preserved unchanged; select as `omniroute/` plus the complete ID |
-| `name` | Display name, falling back to ID |
+| `name` | Display name; an empty or whitespace-only name after terminal-control removal falls back to the unchanged ID |
 | `type` absent, `chat`, `text`, or `completion` | Chat kind, `openai-completions`; `omniroute-chat` when interception features are enabled |
 | `type: "embedding"` | Embedding kind, `openai-embeddings` |
 | `type: "image"` | Image kind, `openai-images` |
@@ -76,6 +78,8 @@ When the selected model disappears or is filtered out, the extension warns but d
 | `max_output_tokens` | `maxTokens`, bounded by context window |
 
 Missing limits use 8192 context tokens and 2048 output tokens, recorded in `defaultsUsed`; these are placeholders, not model-specific guarantees. Missing/empty effort tiers do not invent a reasoning dial. Unsupported effort names and unknown fields remain in the raw metadata. Image and embedding models have their own roles, not chat-picker entries.
+
+**Native image download boundary:** OMP 18.18.2 requests base64 images, but its native decoder also accepts a response's `data.url` and downloads that destination, following redirects. That second request does not carry the gateway Bearer token. The extension's bounded, redirect-rejecting gateway GET helper does not govern these image downloads. Use a trusted gateway; a compromised or untrusted response could select another network destination. The public image API has no provider-scoped destination/redirect/size policy hook. Enforcement is deferred to an upstream mechanism rather than replacing native transport or breaking valid CDN URLs.
 
 The last successful accepted rows and mapping metadata are kept in memory for `/omniroute-model`. Rejected valid IDs retain rejection reasons, not their raw payloads. `/omniroute-status` counts malformed rows/IDs, accepted-ID duplicates, include/exclude filtering, unsupported types/inputs, and explicit lack of required tools. Each skipped row counts under its first rejection; one ID can accumulate distinct reasons, including a discarded duplicate after an accepted row. Malformed IDs contribute only to counts.
 
@@ -93,6 +97,8 @@ Fallback context/output counts are grouped by chat, embedding, and image kind. T
 `auto/*`, `combo/*`, `owned_by: "combo"`, and explicit variable-pricing metadata identify variable routes. OmniRoute's bare `auto` row is covered by its `owned_by: "combo"` metadata. Other aliases need explicit metadata or `OMNIROUTE_VARIABLE_PRICE`; names alone are not reliable.
 
 Unknown and variable rates use zero-valued numeric schema placeholders. **Zero placeholders do not mean free.** Credit/per-request pricing cannot be represented faithfully in token-rate fields.
+
+OMP 18.18.2's public custom-model registration does not propagate structured `pricingStatus`. Its native zero-price classification without that field is **unknown**, not free; explicit free, variable and unknown zero-priced rows cannot all be distinguished there. The extension preserves its display-name annotations and inspection metadata. Full native classification awaits upstream field propagation; it does not justify impersonating a built-in provider.
 
 Enable `OMNIROUTE_REPORTED_COST=true` to replace final chat totals with reported USD costs. OMP 18.18.1 only applies native chat reported costs automatically for its built-in `openrouter` and `cline-pass` provider names. The extension instead delegates through its own `omniroute-chat` wrapper to OMP's real OpenAI adapter, without replacing global transports or impersonating a provider.
 
@@ -156,6 +162,8 @@ The native usage adapter and `/omniroute-usage` read `/api/usage/om-usage?format
 Personal daily/weekly amounts use USD. When both spending and a positive limit are known, the adapter supplies remaining allowance and bounded fractions for native usage bars. Missing spending/limits remain unknown; zero limits are not divided by. Explicit provider `usedPercentage` values above 100 remain visible and report exhausted, while normalized fractions cap at 1. Invalid remaining percentages and bare counters without interpretable units remain unknown.
 
 Provider quotas are raw cached upstream snapshots, not cutoff-adjusted usable allowance. Missing, empty, or refused data is not zero; gateway tracking is not a settled provider bill.
+
+Usage labels remove terminal controls, redact normalized credential echoes, then truncate. Account and quota identifiers are opaque hashes of namespaced raw identities rather than display labels, so truncation, control removal and provider-name collisions do not merge unrelated limits. Named identities survive response reordering; snapshots without a connection ID use position-dependent anonymous identifiers. Native usage cache version 3 invalidates the former identity representation without changing personal limit IDs, user configuration or catalog caches.
 
 For a configured API path `/prefix/v1`, inference/catalog routes stay under `/prefix/v1/*`, but usage resolves to `/prefix/api/usage/om-usage?format=json`. Forward that sibling path separately. Preserve `Authorization` and SSE through the proxy; do not redirect API traffic to a dashboard login. No alternate usage-origin setting is needed or provided.
 

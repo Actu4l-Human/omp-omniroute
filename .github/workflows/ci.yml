@@ -162,7 +162,7 @@ jobs:
           assert.equal(pack.name, '@actu4l-human/omp-omniroute');
           assert.match(pack.version, /^\d+\.\d+\.\d+$/);
           if (process.env.RELEASE_TAG) assert.equal(process.env.RELEASE_TAG, `v${pack.version}`);
-          const allowed = new Set(['package.json', 'index.ts', 'README.md', 'CHANGELOG.md', '.env.example', 'overrides.example.json']);
+          const allowed = new Set(['package.json', 'index.ts', 'README.md', 'CHANGELOG.md', 'LICENSE', '.env.example', 'overrides.example.json']);
           const paths = new Set(pack.files.map(file => file.path));
           for (const file of paths) assert.ok(allowed.has(file) || /^(src\/[^/]+\.ts|docs\/[^/]+\.md)$/.test(file), `Unexpected package file: ${file}`);
           for (const file of [...allowed, 'src/extension.ts']) assert.ok(paths.has(file), `Missing package file: ${file}`);

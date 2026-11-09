@@ -3,6 +3,7 @@
   "version": "1.4.1",
   "type": "module",
   "description": "A focused dynamic OmniRoute provider extension for Oh My Pi",
+  "license": "AGPL-3.0-or-later",
   "repository": {
     "type": "git",
     "url": "git+https://github.com/Actu4l-Human/omp-omniroute.git"
@@ -15,6 +16,7 @@
     "src/*.ts",
     "README.md",
     "CHANGELOG.md",
+    "LICENSE",
     "docs/*.md",
     ".env.example",
     "overrides.example.json"
@@ -22,8 +24,8 @@
   "scripts": {
     "test": "node --test test/*.test.ts",
     "typecheck": "tsc -p tsconfig.json",
-    "test:integration": "bun test ./test/reported-cost.integration.ts ./test/specialty.integration.ts",
-    "test:cli": "bun test/cli-smoke.ts"
+    "test:integration": "node test/run-bun.ts test ./test/reported-cost.integration.ts ./test/specialty.integration.ts",
+    "test:cli": "node test/run-bun.ts test/cli-smoke.ts"
   },
   "engines": {
     "node": ">=24"
@@ -34,6 +36,11 @@
     "@types/node": "26.6.6",
     "bun": "1.4.4",
     "typescript": "7.0.2"
+  },
+  "overrides": {
+    "@oh-my-pi/pi-coding-agent@18.18.2": {
+      "puppeteer-core": "25.16.0"
+    }
   },
   "omp": {
     "extensions": [

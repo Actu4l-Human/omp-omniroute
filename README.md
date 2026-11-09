@@ -21,7 +21,7 @@ With gateway environment variables configured as below, load `$HOME/omp-extensio
 
 ## Install from this folder
 
-Use a working latest stable OMP installation with the Bun version required by that release. The extension does not upgrade your host or profile. Keep `index.ts`, `package.json`, and the complete `src/` directory together. Runtime installation does **not** need `npm ci` or an extension-local `node_modules`.
+Use a working latest stable OMP installation with the Bun version required by that release. The extension does not upgrade your host or profile. Keep `index.ts`, `package.json`, the complete `src/` directory, `README.md`, and `LICENSE` together. Runtime installation does **not** need `npm ci` or an extension-local `node_modules`.
 
 Place this source folder at a permanent location, such as `$HOME/omp-extensions/omp-omniroute`. Root `index.ts` is the only entry point; do not load files under `src/` individually.
 
@@ -85,3 +85,19 @@ Doctor validates local overrides and performs authenticated **GETs only**, repor
 - [Development layout and test commands](docs/development.md)
 
 Real CLI tool execution and SDK embedding/image transports pass against isolated fixtures. Live checks cover authentication, catalog, health, and usage normalization only; live inference, billing, and native usage UI rendering remain unverified.
+
+## License and contributions
+
+Copyright (C) 2026 omp-omniroute contributors.
+
+This program is free software: you can redistribute it and/or modify it under the terms of the GNU Affero General Public License as published by the Free Software Foundation, either version 3 of the License, or (at your option) any later version (**AGPL-3.0-or-later**).
+
+This program is distributed without any warranty, including the implied warranties of merchantability or fitness for a particular purpose. See [LICENSE](LICENSE) for the full terms.
+
+Contributions are welcome under the same license. Covered distributed modifications must preserve the applicable notices and source availability obligations; section 13 also covers modified versions supporting remote network interaction. Compliant fork improvements may be incorporated here with their attribution and license notices preserved, after review and testing. The license does not require upstream pull requests or automatic synchronization.
+
+### Dependency license review
+
+The reviewed lockfile contains 105 development packages: MIT (56), Apache-2.0 (42), ISC (5), BSD-3-Clause (1), and MPL-2.0 (1, `axe-core`). The runtime SDK packages are MIT-licensed and supplied by OMP. The release package ships this extension's source, not `node_modules` or dependency binaries; dependency installation fetches their separately licensed packages. No dependency-license conflict was identified for this packaging arrangement. This is a technical review, not legal certification or proof of authorship.
+
+If dependency code is later copied, bundled, or redistributed, retain its applicable copyright, license and notice files; satisfy any source-disclosure and modification-notice requirements rather than relicensing it by assumption. Apache-2.0 is [compatible with GPLv3-family licensing](https://www.gnu.org/licenses/license-list.html#apache2); MPL-2.0 has [file-level and secondary-license conditions](https://www.mozilla.org/en-US/MPL/2.0/FAQ/), including an exception for files marked incompatible with secondary licenses. Re-review the actual files and distribution when either changes.

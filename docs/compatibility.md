@@ -111,6 +111,33 @@ The completed runtime changes passed `npm.cmd test` (**88 passed**), `npm.cmd ru
 
 **Unresolved upstream dependency:** the reviewed [OMP selection controller](https://github.com/can1357/oh-my-pi/blob/cb4801a7d6db666946a1b65fce5cdf50d2947b96/packages/coding-agent/src/modes/controllers/extension-ui-controller.ts#L254-L258), also present in published 18.18.2, awaits authentication before unconditional replacement. The public `setModel(model): Promise<boolean>` contract has no conditional parameter. Fixing selection/session changes during that await requires atomic replacement guarded by the expected selection and session after authentication. This local correction does not fix that separate race, patch the host, or restore a potentially stale selection.
 
+## Audit remediation (2026-11-08)
+
+Findings were revalidated against SDK **18.18.2**, Bun **1.4.4**, TypeScript **7.0.2**, and the current source before implementation. The initial batch needed no dependency overrides, host/profile edits or live gateway requests. The subsequent development-only security override is described below.
+
+| Batch | Acceptance and observed local evidence |
+| --- | --- |
+| Release and fixture isolation | Release Please v4.4.1 resolves to `5c625bfb5d1ff62eadeeb3772007f7f66fdcf071`. Three actual spawned-Bun regressions pass: dotenv and inherited credential/proxy/preload markers are absent, temporary paths are isolated and removed, and script/test modes, arguments and nonzero status are preserved. |
+| Usage privacy and identity | Direct and native usage paths pass control-normalization/redaction, truncated/control/provider label collision, exact duplicate, named reorder and anonymous namespace cases. Personal IDs and values remain unchanged; each fetch makes one GET. |
+| Catalog and selection | Sanitized-empty names retain the exact gateway ID. A real owner registry retains that row and makes zero selections across two unchanged authenticated refreshes, then updates changed limits, prices and transport. Resolver comparison does not resolve credentials. |
+| Licensing | Owner selected AGPL-3.0-or-later. The official license accompanies the source package; CI now requires it. Dependency scope and redistribution obligations are documented in the README. |
+
+Local validation passed **100 unit/lifecycle tests**, strict typechecking and **11 SDK integrations (67 assertions)** on Windows/Node 26.13.0. Integration startup uses the new Node launcher and Bun's native `--no-env-file`, `DO_NOT_TRACK=1`, and `BUN_RUNTIME_TRANSPILER_CACHE_PATH=0` controls. Earlier checks launched with bare Bun do not establish dotenv isolation and may have inherited the working directory's `.env`; the new regressions use only synthetic markers. Hosted Actions, POSIX execution, live inference, settled billing and native usage UI rendering are not established by these results.
+
+### Remaining findings and rejected workarounds
+
+- **Native image policy (F07):** SDK response-selected URL downloads remain outside the bounded gateway GET helper. The installed public image API has no provider-scoped policy hook. The trust boundary is documented; destination/redirect/size enforcement is deferred rather than silently breaking CDN image responses or patching host internals.
+- **Structured pricing (F10):** SDK custom-model registration drops `pricingStatus`. Native zero-price classification is unknown, not free, absent that field. Name/inspection distinctions remain; full native classification is blocked on upstream propagation.
+- **Transitive Zod advisory — remediated in this development graph:** [GHSA-mrhx-c7xc-m3w5](https://github.com/advisories/GHSA-mrhx-c7xc-m3w5) names **4.6.6** as fixed. A scoped npm override upgrades SDK 18.18.2's Puppeteer to **25.16.0**, whose supported BiDi dependency accepts Zod 4; the lockfile resolves **4.6.7**. Forcing Zod 4 into the old BiDi 16 consumer remains rejected. This does not update users' host-supplied SDK/browser dependencies.
+- **Existing upstream limits:** the authentication-await selection race described above and bounded socket-drain behavior described in configuration remain. No unsupported conditional-selection shim or duplicate concurrency permit was added.
+- **GET consolidation — implemented after reproduction:** an injected fetch ignoring cancellation left catalog discovery pending after its timeout signal fired. Discovery now reuses the shared bounded GET helper, retaining model-envelope validation and sanitized model-specific errors. A fake-clock regression covers stalled fetch and stalled body/cancellation cleanup. Broader performance rewrites remain speculative and unimplemented.
+
+### Follow-up verification
+
+The follow-up passed **101 unit/lifecycle tests**, strict typechecking and **11 SDK integrations (67 assertions)**. A disposable dependency probe exercised OMP's real Puppeteer loader/error identity, BiDi valid/invalid command parsing, and Zod's constrained-array early rejection: 1,000 invalid elements over a length limit produced one `too_big` issue rather than per-element issues. `npm ls` confirms the overridden parent → supported BiDi → Zod 4.6.7 chain. Eight transitive packages changed; direct SDK/Bun/TypeScript pins and the dependency license distribution are unchanged.
+
+No full Chromium browser session was exercised, so browser launch/interaction compatibility beyond the loader/parser checks remains unverified. Hosted Actions, POSIX/Node 24, live gateway/inference and native UI checks remain unverified. The override is development-root-only, not a runtime security guarantee for separately installed hosts.
+
 ## Live deployment evidence
 
 The supplied root `.env` was an explicit validation input, parsed with Node `parseEnv(readFileSync('.env','utf8'))`, not shell evaluation or extension dotenv loading. Only authenticated GET requests were authorized and sent. No private URL, credential, raw remote payload, spend, or account detail is recorded here.

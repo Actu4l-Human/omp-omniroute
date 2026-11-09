@@ -1,5 +1,21 @@
 # Changelog
 
+## Unreleased
+
+### Fixes
+
+- Correct the pinned Release Please action and document approval-required bot-PR checks.
+- Isolate Bun fixture startup from dotenv, inherited credentials, telemetry and host caches.
+- Redact normalized usage labels before truncation and prevent account/quota identity collisions.
+- Preserve catalog rows with control-only names and avoid reselection caused only by rebuilt header resolver functions.
+- Enforce catalog deadlines through the shared bounded GET helper, including fetch/body implementations that ignore cancellation.
+- Resolve the development Zod advisory through a scoped Puppeteer 25.x update with its supported BiDi/Zod dependency chain.
+
+### Licensing and documentation
+
+- Adopt AGPL-3.0-or-later with the license included in release packages.
+- Document dependency-license obligations, native image-download and pricing limitations, and supported development Node versions.
+
 ## [1.4.1](https://github.com/Actu4l-Human/omp-omniroute/compare/v1.4.0...v1.4.1) (2026-11-08)
 
 

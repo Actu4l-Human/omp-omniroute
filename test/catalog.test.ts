@@ -28,6 +28,20 @@ test('maps gateway metadata to OMP, retaining original metadata separately', () 
   assert.equal(metadata.get(row.id)?.tools, true);
   assert.equal(metadata.get(row.id)?.pricingStatus, 'estimated');
 });
+test('sanitizes display names before falling back to the unchanged gateway ID',()=>{
+  const rows=[
+    chat({id:'priced',name:'\u0000\u001b\u007f'}),
+    chat({id:'whitespace',name:' \u0000 '}),
+    chat({id:'unknown',name:'\u0000',pricing:undefined}),
+    chat({id:'named',name:'Readable\u0000 name'}),
+    chat({id:'bounded',name:'x'.repeat(250)}),
+  ];
+  const result=mapCatalog({data:rows},config());
+  assert.deepEqual(result.models.map(({id,name})=>[id,name]),[
+    ['priced','priced'],['whitespace','whitespace'],['unknown','unknown [price unknown]'],
+    ['named','Readable name'],['bounded','x'.repeat(240)],
+  ]);
+});
 test('selects embedding and image transports and excludes unsupported types', () => {
   const {models} = mapCatalog({data:[chat({id:'embed',type:'embedding'}),chat({id:'image',type:'image'}),chat({id:'audio',type:'audio'})]},config());
   assert.deepEqual(models.map(x => [x.id,x.api,x.kind]), [['embed','openai-embeddings','embedding'],['image','openai-images','image']]);
@@ -224,5 +238,24 @@ test('catalog rejection does not wait for nonsettling cleanup',async()=>{
     await nextTurn();
     assert.ok(failure instanceof Error);
     assert.equal(failure.message,kind==='http'?'OmniRoute models request failed (HTTP 503)':'OmniRoute models response is too large');
+  }
+});
+test('catalog deadline settles even when fetch or body ignores cancellation',{timeout:1000},async(t)=>{
+  t.mock.timers.enable({apis:['setTimeout']});
+  for(const phase of ['fetch','body'] as const){
+    let signal:AbortSignal|undefined;
+    let cancelled=false;
+    const body=new ReadableStream<Uint8Array>({cancel(){cancelled=true;return new Promise(()=>{});}});
+    const fetchImpl:typeof fetch=async(_url,init)=>{
+      signal=init?.signal ?? undefined;
+      return phase==='fetch'?new Promise(()=>{}):new Response(body);
+    };
+    const pending=fetchCatalog({...config(),timeoutMs:10},'fixture-key',fetchImpl);
+    const rejected=assert.rejects(pending,/timeout/);
+    await nextTurn();
+    t.mock.timers.tick(10);
+    await rejected;
+    assert.equal(signal?.aborted,true);
+    if(phase==='body')assert.equal(cancelled,true);
   }
 });

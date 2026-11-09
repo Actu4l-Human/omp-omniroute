@@ -2,8 +2,9 @@ import { mkdtemp, rm, mkdir, copyFile, cp, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 import assert from 'node:assert/strict';
+import { testEnvironment } from './run-bun.ts';
 const externalCli=process.env.OMNIROUTE_SMOKE_CLI;
-const cliCommand=externalCli?[Bun.which(externalCli)??resolve(externalCli)]:[process.execPath,resolve('node_modules/@oh-my-pi/pi-coding-agent/dist/cli.js')];
+const cliCommand=externalCli?[Bun.which(externalCli)??resolve(externalCli)]:[process.execPath,'--no-env-file',resolve('node_modules/@oh-my-pi/pi-coding-agent/dist/cli.js')];
 const root=await mkdtemp(join(tmpdir(),'omp-omniroute-smoke-'));
 const calls:string[]=[];const requestHeaders:Headers[]=[];let failModels=false;
 const fixturePath=join(root,'tool-fixture.txt');const marker='OMNIROUTE_TOOL_FIXTURE_7b42';
@@ -68,17 +69,19 @@ const server=Bun.serve({port:0,hostname:'127.0.0.1',fetch:async(request)=>{
 }});
 async function run(args:string[], reported:boolean,extraEnv:Record<string,string>={}) {
   const proc=Bun.spawn([...cliCommand,...args],{
-    cwd:root,env:{PATH:process.env.PATH??'',HOME:root,USERPROFILE:root,PI_CODING_AGENT_DIR:join(root,'agent'),
-      OMNIROUTE_BASE_URL:`http://127.0.0.1:${server.port}/v1`,OMNIROUTE_API_KEY:'fixture-key',OMNIROUTE_REPORTED_COST:String(reported),OMNIROUTE_INSPECT_REQUESTS:String(reported),...extraEnv,NO_COLOR:'1',TERM:'dumb',CI:'1'},
+    cwd:root,env:{...cliEnv,
+      OMNIROUTE_BASE_URL:`http://127.0.0.1:${server.port}/v1`,OMNIROUTE_API_KEY:'fixture-key',OMNIROUTE_REPORTED_COST:String(reported),OMNIROUTE_INSPECT_REQUESTS:String(reported),...extraEnv},
     stdout:'pipe',stderr:'pipe',timeout:45000,
   });
   const [stdout,stderr,code]=await Promise.all([new Response(proc.stdout).text(),new Response(proc.stderr).text(),proc.exited]);
   assert.equal(code,0,stderr+'\n'+stdout);return stdout;
 }
+let cliEnv:NodeJS.ProcessEnv;
 try {
+  cliEnv=await testEnvironment(root);
   const extensionDir=join(root,'agent','extensions','omniroute');await mkdir(extensionDir,{recursive:true});
   if(process.argv[2]){
-    const unpack=Bun.spawn(['tar','-xzf',resolve(process.argv[2]),'-C',extensionDir,'--strip-components=1'],{stdout:'pipe',stderr:'pipe',timeout:10000});
+    const unpack=Bun.spawn(['tar','-xzf',resolve(process.argv[2]),'-C',extensionDir,'--strip-components=1'],{env:cliEnv,stdout:'pipe',stderr:'pipe',timeout:10000});
     const [stderr,code]=await Promise.all([new Response(unpack.stderr).text(),unpack.exited]);
     assert.equal(code,0,stderr);
   }else{
@@ -129,4 +132,4 @@ try {
   console.log('Cached custom-API fallback after disabling reported-cost mode: passed');
   assert.ok(calls.includes('/v1/models'));assert.ok(calls.includes('/v1/chat/completions'));
   console.log('CLI smoke test passed: automatic/explicit loading, three model kinds, chat, read-tool round trips, controls, reported cost and cached fallback.');
-} finally {server.stop(true);await rm(root,{recursive:true,force:true});}
+} finally {server.stop(true);await rm(root,{recursive:true,force:true,maxRetries:3,retryDelay:100});}

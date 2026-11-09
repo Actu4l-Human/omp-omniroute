@@ -1,3 +1,4 @@
+import {createHash} from 'node:crypto';
 import type {UsageProvider,UsageReport,UsageLimit,UsageAmount} from '@oh-my-pi/pi-ai';
 import {PROVIDER,type Config} from './catalog.ts';
 import {getGatewayJson,GatewayError,asRecord,safeLabel} from './gateway.ts';
@@ -5,13 +6,20 @@ const numeric=(v:unknown):number|undefined=>typeof v==='number' && Number.isFini
 const reset=(v:unknown):number|undefined=>typeof v==='string' && /^\d{4}-\d\d-\d\dT/.test(v) && Number.isFinite(Date.parse(v))?Date.parse(v):undefined;
 // Fractions describe consumed allowance (0..1); raw amounts retain any overage.
 const usedFraction=(used:number,limit:number):number=>used>=limit?1:used/limit;
+const normalizeLabel=(value:string):string=>value.replace(/[\x00-\x1f\x7f-\x9f]/g,'');
+// Hash raw, domain-separated identity tuples, never lossy display labels.
+const opaqueId=(namespace:'account'|'anonymous'|'quota',...identity:(string|number|null)[]):string=>`${namespace}:${createHash('sha256').update(JSON.stringify([namespace,...identity])).digest('hex')}`;
 function status(amount:UsageAmount):UsageLimit['status']{
  const ratio=amount.usedFraction ?? (amount.used!==undefined && amount.limit!==undefined && amount.limit>0?usedFraction(amount.used,amount.limit):undefined);
  if(ratio!==undefined)return ratio>=1?'exhausted':ratio>=.8?'warning':'ok';
  return amount.used!==undefined && amount.limit===0?'exhausted':'unknown';
 }
 function mapUsage(payload:unknown,key:string|undefined):UsageReport {
- const labelText=(value:unknown,fallback:string)=>safeLabel(typeof value==='string' && key?value.split(key).join('[redacted]'):value,fallback);
+ const normalizedKey=key?normalizeLabel(key):'';
+ const labelText=(value:unknown,fallback:string)=>{
+  const normalized=typeof value==='string'?normalizeLabel(value):value;
+  return safeLabel(typeof normalized==='string' && normalizedKey?normalized.split(normalizedKey).join('[redacted]'):normalized,fallback);
+ };
  const root=asRecord(payload);if(root?.allowed===false)throw new Error('OmniRoute usage request was refused; check the key and allowUsageCommand permission');
  if(root?.allowed!==true)throw new Error('OmniRoute usage response has an invalid shape');
  const report:UsageReport={provider:PROVIDER,fetchedAt:Date.now(),limits:[],notes:['Provider quotas are raw cached upstream snapshots, not cutoff-adjusted usable allowance. Cache observation time is not supplied.']};
@@ -29,10 +37,14 @@ function mapUsage(payload:unknown,key:string|undefined):UsageReport {
  const seen=new Set<string>();
  for(const [i,candidate] of snapshots.entries()){
   const snapshot=asRecord(candidate);const quotas=asRecord(snapshot?.quotas);if(!snapshot || !quotas)continue;
-  const provider=labelText(snapshot.provider,'Provider');const account=labelText(snapshot.connectionId,`snapshot-${i+1}`);
+  const provider=labelText(snapshot.provider,'Provider');
+  const rawProvider=typeof snapshot.provider==='string'?snapshot.provider:null;
+  const rawAccount=typeof snapshot.connectionId==='string' && snapshot.connectionId.trim()?snapshot.connectionId:undefined;
+  // Missing connection IDs have only snapshot-local identity, separate from real account names.
+  const account=rawAccount!==undefined?opaqueId('account',rawProvider,rawAccount):opaqueId('anonymous',rawProvider,i);
   if(seen.has(account))continue;seen.add(account);
   for(const [name,value] of Object.entries(quotas)){
-   const q=asRecord(value);if(!q)continue;const label=labelText(name,'Quota');
+   const q=asRecord(value);if(!q)continue;const label=labelText(name,'Quota'),quota=opaqueId('quota',account,name);
    const used=numeric(q.used),total=numeric(q.total),usedPercent=numeric(q.usedPercentage),remainingPercent=numeric(q.remainingPercentage);
    const amount:UsageAmount={unit:'unknown'};
    if(usedPercent!==undefined){amount.unit='percent';amount.used=usedPercent;amount.limit=100;amount.usedFraction=usedFraction(usedPercent,100);}
@@ -40,7 +52,7 @@ function mapUsage(payload:unknown,key:string|undefined):UsageReport {
    else if(used!==undefined && total!==undefined && total>0){amount.used=used;amount.limit=total;amount.usedFraction=usedFraction(used,total);}
    // A bare used/remaining value has no reliable unit; do not guess a percentage.
    const resetsAt=reset(q.resetAt);
-   report.limits.push({id:`provider:${account}:${label}`,label:`${provider} ${label} (raw)`,scope:{provider:PROVIDER,accountId:account,windowId:label},window:{id:label,label,...(resetsAt!==undefined?{resetsAt}:{})},amount,status:status(amount)});
+   report.limits.push({id:quota,label:`${provider} ${label} (raw)`,scope:{provider:PROVIDER,accountId:account,windowId:quota},window:{id:quota,label,...(resetsAt!==undefined?{resetsAt}:{})},amount,status:status(amount)});
   }
  }
  if(!report.limits.length)report.notes!.push('No usable usage data is available; this does not mean zero usage.');
@@ -51,7 +63,7 @@ export async function fetchUsageSnapshot(config:Config,key:string|undefined,fetc
  catch(error){if(error instanceof GatewayError && error.status===403)throw new Error('OmniRoute usage requires allowUsageCommand for this API key (HTTP 403); ask your gateway administrator to enable it if desired');if(error instanceof GatewayError && error.status===401)throw new Error('OmniRoute usage authentication failed (HTTP 401); check your API key');throw error;}
 }
 export function createUsageProvider(config:Config,fetchImpl?:typeof fetch):UsageProvider{
- return {id:PROVIDER,cacheVersion:2,retainLastGoodOnFailure:false,validatesCredentials:false,
+ return {id:PROVIDER,cacheVersion:3,retainLastGoodOnFailure:false,validatesCredentials:false,
  supports:params=>params.provider===PROVIDER && params.credential.type==='api_key',
  fetchUsage:(params,ctx)=>fetchUsageSnapshot(config,params.credential.apiKey,fetchImpl ?? ctx.fetch as typeof fetch,params.signal)};
 }

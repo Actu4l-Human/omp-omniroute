@@ -3,6 +3,8 @@ import { streamOmniRoute,streamNative } from '../src/reported-cost.ts';
 import type { Model, Context } from '@oh-my-pi/pi-ai';
 import {installOmniRoute} from '../src/extension.ts';
 import type {ExtensionAPI,ProviderConfig} from '@oh-my-pi/pi-coding-agent';
+import {AuthStorage} from '@oh-my-pi/pi-ai';
+import {ModelRegistry} from '@oh-my-pi/pi-coding-agent/config/model-registry';
 const model:Model<'omniroute-chat'>={id:'fixture-chat',name:'Fixture',provider:'omniroute',api:'omniroute-chat',baseUrl:'https://router.example/v1',reasoning:false,input:['text'],cost:{input:1,output:2,cacheRead:0,cacheWrite:0},contextWindow:8192,maxTokens:2048,compat:{supportsUsageInStreaming:true}};
 const context:Context={messages:[{role:'user',content:'Hello',timestamp:Date.now()}]};
 const frame=(obj:unknown)=>`data: ${JSON.stringify(obj)}\n\n`;
@@ -134,3 +136,49 @@ test('a cache-bypass change during native rebinding reaches the next real adapte
     unregisterCustomApis('omniroute-control-race');
   }
 },5000);
+
+test('real owner registry retains sanitized names and skips unchanged authenticated refreshes',async()=>{
+  const root=await mkdtemp(join(tmpdir(),'omp-registry-'));
+  let auth:AuthStorage|undefined;let registry:ModelRegistry|undefined;
+  const handlers=new Map<string,Function>();const commands=new Map<string,any>();const timers:Function[]=[];
+  let selected:Model<any>|undefined;let selections=0;
+  let row={id:'fixture-registry',name:'\u0000',context_length:8192,pricing:{input:1,output:2}};
+  const ctx:any={
+    models:{current:()=>selected},isIdle:()=>true,hasUI:false,ui:{notify:()=>{}},
+    setInterval:(callback:Function)=>{timers.push(callback);return 1;},clearTimer:()=>{},
+  };
+  try {
+    auth=await AuthStorage.create(join(root,'auth.db'));
+    registry=new ModelRegistry(auth,join(root,'models.yml'),{
+      ignoreLocalModelConfig:true,cacheDbPath:join(root,'models.db'),
+      fetch:async()=>{throw new Error('Unexpected registry network request');},
+    });
+    ctx.modelRegistry=registry;
+    const pi={
+      on:(name:string,handler:Function)=>handlers.set(name,handler),
+      registerCommand:(name:string,command:any)=>commands.set(name,command),
+      registerProvider:(name:string,config:ProviderConfig)=>registry!.registerProvider(name,{...config,apiKey:'fixture-key'}),
+      setModel:async(next:Model<any>)=>{selected=next;selections++;return true;},
+    };
+    await installOmniRoute(pi as unknown as ExtensionAPI,{
+      OMNIROUTE_BASE_URL:'https://router.example/v1',OMNIROUTE_API_KEY:'fixture-key',OMNIROUTE_INSPECT_REQUESTS:'false',
+    },async()=>Response.json({data:[row]}),()=>{throw new Error('No inference in registry regression');});
+    await handlers.get('session_start')!({},ctx);
+    selected=registry.find('omniroute',row.id);
+    expect(selected?.name).toBe(row.id);
+    expect(registry.getProviderModels('omniroute').map(model=>model.id)).toEqual([row.id]);
+    await timers[0]();await timers[0]();
+    expect(selections).toBe(0);
+    row={...row,context_length:16384};await timers[0]();
+    expect(selections).toBe(1);expect(selected?.contextWindow).toBe(16384);
+    row={...row,pricing:{input:3,output:2}};await timers[0]();
+    expect(selections).toBe(2);expect(selected?.cost.input).toBe(3);
+    await commands.get('omniroute-controls').handler('cache-bypass on',ctx);
+    expect(selections).toBe(3);expect(selected?.api).toBe('omniroute-chat');
+    await timers[0]();expect(selections).toBe(3);
+  } finally {
+    await handlers.get('session_shutdown')?.({},ctx);
+    registry?.unregisterProvider('omniroute');auth?.close();
+    await rm(root,{recursive:true,force:true});
+  }
+},10000);

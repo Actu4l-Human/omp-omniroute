@@ -146,6 +146,29 @@ test('refresh rebinds changed metadata only while idle after successful discover
   assert.equal(selections,1);assert.equal(ctx.model,selected);
   await handlers.get('session_shutdown')!({},ctx);
 });
+test('refresh ignores resolver identity without resolving credentials but retains header changes',async()=>{
+  const h=harness(async()=>Response.json({data:[{id:'m'}]}));
+  const handlers=new Map<string,Function>();let provider:any;let selections=0;let resolutions=0;
+  const resolveHeaders=async()=>{resolutions++;return {Authorization:'Bearer fixture-key'};};
+  let current:any={provider:'omniroute',id:'m',api:'openai-completions',headers:{'X-Fixture':'first'},resolveHeaders};
+  const ctx:any={...h.ctx,model:{...current},models:{current:()=>ctx.model},
+    modelRegistry:{refreshDiscoverableProviders:async()=>{await provider.fetchDynamicModels('test-key');},
+      find:()=>({...current,...(current.resolveHeaders?{resolveHeaders:async()=>resolveHeaders()}: {})})}};
+  const pi:any={registerProvider:(_name:string,p:any)=>provider=p,registerCommand:()=>{},
+    on:(name:string,handler:Function)=>handlers.set(name,handler),
+    setModel:async(model:any)=>{selections++;ctx.model=model;return true;}};
+  try {
+    await installOmniRoute(pi,env,async()=>Response.json({data:[{id:'m'}]}),()=>{throw new Error('No inference');});
+    await handlers.get('session_start')!({},ctx);await h.timers[0]();
+    assert.equal(selections,0);assert.equal(resolutions,0);
+    current={...current,headers:{'X-Fixture':'second'}};await h.timers[0]();
+    assert.equal(selections,1);assert.equal(ctx.model.headers['X-Fixture'],'second');
+    current={...current,resolveHeaders:undefined};await h.timers[0]();
+    assert.equal(selections,2);assert.equal(ctx.model.resolveHeaders,undefined);
+    current={...current,resolveHeaders};await h.timers[0]();
+    assert.equal(selections,3);assert.equal(resolutions,0);
+  } finally {await handlers.get('session_shutdown')?.({},ctx);}
+});
 test('registers usage and doctor commands without making background management requests',async()=>{
   const paths:string[]=[];
   const h=harness(async(url)=>{const path=new URL(String(url)).pathname;paths.push(path);

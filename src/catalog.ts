@@ -1,6 +1,7 @@
 import type { ProviderModelConfig } from '@oh-my-pi/pi-coding-agent';
 import type { Effort } from '@oh-my-pi/pi-ai';
 import {applyOverridesToRow,auditOverrides,type ModelOverrides,type ModelOverride,type OverrideDiagnostics} from './overrides.ts';
+import {getGatewayJson,GatewayError} from './gateway.ts';
 
 export const PROVIDER = 'omniroute';
 export interface Config {
@@ -41,7 +42,6 @@ export interface Catalog {
     overrides: OverrideDiagnostics;
   };
 }
-const MAX_BODY_BYTES = 5 * 1024 * 1024;
 const EFFORTS = ['minimal', 'low', 'medium', 'high', 'xhigh', 'max'];
 const record = (value: unknown): Record<string, unknown> | undefined =>
   value !== null && typeof value === 'object' && !Array.isArray(value) ? value as Record<string, unknown> : undefined;
@@ -175,7 +175,8 @@ export function mapCatalog(payload: unknown, config: Config, overrides:ModelOver
     const defaultsUsed: string[] = [];
     const contextWindow = positiveInt(row.context_length) ?? (defaultsUsed.push('context_length=8192'), diagnostics.fallbacks[kind].contextWindow++, 8192);
     const maxTokens = Math.min(positiveInt(row.max_output_tokens) ?? (defaultsUsed.push('max_output_tokens=2048'), diagnostics.fallbacks[kind].maxTokens++, 2048), contextWindow);
-    const rawName = typeof row.name === 'string' && row.name.trim() ? row.name.replace(/[\x00-\x1f\x7f]/g,'').slice(0,240) : id;
+    const cleanedName = typeof row.name === 'string' ? row.name.replace(/[\x00-\x1f\x7f]/g,'').slice(0,240) : '';
+    const rawName = cleanedName.trim() ? cleanedName : id;
     const name = pricingStatus === 'estimated' ? rawName : `${rawName} [price ${pricingStatus}]`;
     models.push({
       id, name, api: kind === 'embedding' ? 'openai-embeddings' : kind === 'image' ? 'openai-images' : usesChatAdapter(config) ? 'omniroute-chat' : 'openai-completions', kind,
@@ -195,33 +196,13 @@ export function mapCatalog(payload: unknown, config: Config, overrides:ModelOver
   return {models, metadata, skipped, rejections, diagnostics};
 }
 export async function fetchCatalog(config: Config, key?: string, fetchImpl: typeof fetch = fetch): Promise<{data: unknown[]}> {
-  if (!key || key === 'OMNIROUTE_API_KEY' || /[\r\n]/.test(key)) throw new Error('Set a valid OMNIROUTE_API_KEY before starting OMP');
-  let response: Response;
+  let payload:unknown;
   try {
-    response = await fetchImpl(`${config.baseUrl}/models`, { method:'GET', redirect:'error',
-      headers:{Authorization:`Bearer ${key}`, Accept:'application/json'}, signal:AbortSignal.timeout(config.timeoutMs) });
-  } catch { throw new Error('OmniRoute models request failed (network, redirect, or timeout)'); }
-  const cancel=()=>{void response.body?.cancel().catch(()=>{});};
-  if (!response.ok) { cancel(); throw new Error(`OmniRoute models request failed (HTTP ${response.status})`); }
-  if (Number(response.headers.get('content-length')) > MAX_BODY_BYTES) { cancel(); throw new Error('OmniRoute models response is too large'); }
-  const reader = response.body?.getReader();
-  if (!reader) throw new Error('OmniRoute models response has no body');
-  const chunks: Uint8Array[] = []; let total = 0;
-  try {
-    for (;;) {
-      const {done,value} = await reader.read(); if (done) break;
-      total += value.byteLength;
-      if (total > MAX_BODY_BYTES) { void reader.cancel().catch(()=>{}); throw new Error('OmniRoute models response is too large'); }
-      chunks.push(value);
-    }
-  } catch (error) {
-    if (error instanceof Error && error.message === 'OmniRoute models response is too large') throw error;
-    throw new Error('OmniRoute models response could not be read (network or timeout)');
-  } finally { reader.releaseLock(); }
-  const bytes = new Uint8Array(total); let offset = 0;
-  for (const chunk of chunks) {bytes.set(chunk,offset); offset+=chunk.length;}
-  let payload: unknown;
-  try {payload=JSON.parse(new TextDecoder().decode(bytes));} catch {throw new Error('OmniRoute models response is not valid JSON');}
+    ({payload}=await getGatewayJson(config,'models',key,fetchImpl));
+  } catch(error) {
+    if(error instanceof GatewayError)throw new Error(error.message.replace(/^OmniRoute /,'OmniRoute models '));
+    throw error;
+  }
   const envelope=record(payload);
   if (!envelope || !Array.isArray(envelope.data)) throw new Error('OmniRoute models response must contain a data array');
   return envelope as {data:unknown[]};
