@@ -4,7 +4,7 @@ Use a self-hosted OmniRoute gateway as an **extension-registered `omniroute` pro
 
 Development and release verification target the **latest published stable OMP SDK**, including breaking releases. Exact development pins record the validated snapshot, not a frozen compatibility baseline. The gateway contract review covers **OmniRoute v3.8.53** and an inspected `release/v3.8.54` development revision. See [historical source revisions and verification limits](docs/compatibility.md).
 
-Package version: **1.4.1**. <!-- x-release-please-version -->
+Package version: **1.4.2**. <!-- x-release-please-version -->
 
 ## GitHub Packages
 
