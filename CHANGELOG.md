@@ -16,6 +16,13 @@
 - Adopt AGPL-3.0-or-later with the license included in release packages.
 - Document dependency-license obligations, native image-download and pricing limitations, and supported development Node versions.
 
+## [1.6.0](https://github.com/Actu4l-Human/omp-omniroute/compare/v1.5.0...v1.6.0) (2026-11-10)
+
+
+### Features
+
+* add self-service key status, session detail mapping and doctor attribution check ([560a090](https://github.com/Actu4l-Human/omp-omniroute/commit/560a090960129603e284441c6cf01e66c9f1aba3))
+
 ## [1.5.0](https://github.com/Actu4l-Human/omp-omniroute/compare/v1.4.2...v1.5.0) (2026-11-10)
 
 
