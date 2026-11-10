@@ -16,6 +16,18 @@
 - Adopt AGPL-3.0-or-later with the license included in release packages.
 - Document dependency-license obligations, native image-download and pricing limitations, and supported development Node versions.
 
+## [1.5.0](https://github.com/Actu4l-Human/omp-omniroute/compare/v1.4.2...v1.5.0) (2026-11-10)
+
+
+### Features
+
+* adopt OmniRoute 3.8.54 session attribution, sessions API and budget visibility ([eb4ac5a](https://github.com/Actu4l-Human/omp-omniroute/commit/eb4ac5a98479b4910744b7a4563c6a0e766720dc))
+
+
+### Bug Fixes
+
+* restore exact SDK pins and exact-scoped Zod override for CI gates ([5dc28c6](https://github.com/Actu4l-Human/omp-omniroute/commit/5dc28c679c4561ee9f4d7d71173c2f096b7e56ce))
+
 ## [1.4.2](https://github.com/Actu4l-Human/omp-omniroute/compare/v1.4.1...v1.4.2) (2026-11-09)
 
 
