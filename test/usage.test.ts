@@ -5,7 +5,7 @@ const response=(data:unknown)=> (async()=>Response.json(data)) as typeof fetch;
 async function usageReport(native:boolean,key:string,payload:unknown){
  let calls=0;const fetchImpl=async()=>{calls++;return Response.json(payload);};
  const report=native?await createUsageProvider(config,fetchImpl).fetchUsage({provider:'omniroute',credential:{type:'api_key',apiKey:key}},{fetch:fetchImpl}):await fetchUsageSnapshot(config,key,fetchImpl);
- assert.ok(report);assert.equal(calls,1);return report;
+ assert.ok(report);assert.equal(calls,2);return report; // legacy usage snapshot + 3.8.54 self-service status
 }
 test('personal daily and weekly USD usage maps without fabricating absent fields',async()=>{
  const r=await fetchUsageSnapshot(config,'secret',response({allowed:true,personal:{dailySpentUsd:1.25,dailyLimitUsd:5,dailyResetAtIso:'2026-11-09T00:00:00Z',weeklyLimitUsd:20}}));

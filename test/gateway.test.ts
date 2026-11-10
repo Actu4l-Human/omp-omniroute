@@ -5,6 +5,9 @@ import { getGatewayJson, gatewayUrl } from '../src/gateway.ts';
 const config=readConfig({OMNIROUTE_BASE_URL:'https://example.test/prefix/v1'});
 test('derived endpoints preserve proxy prefix and refuse arbitrary destinations',()=>{
  assert.equal(gatewayUrl(config,'usage'),'https://example.test/prefix/api/usage/om-usage?format=json');
+ assert.equal(gatewayUrl(config,'meStatus'),'https://example.test/prefix/v1/me/status');
+ assert.equal(gatewayUrl(config,'sessions'),'https://example.test/prefix/v1/me/sessions');
+ assert.throws(()=>gatewayUrl(config,'sessions','/../../admin'),/Invalid OmniRoute session id/);
  assert.throws(()=>gatewayUrl(config,'https://evil.test' as any));
 });
 test('GET uses bearer, no redirects, bounds and sanitizes failures',async()=>{

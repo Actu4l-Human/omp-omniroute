@@ -31,6 +31,11 @@ export function mapSessions(payload:unknown):AgentSessionsReport {
   }
   return {total:num(root.total)??sessions.length, limit:num(root.limit)??20, offset:num(root.offset)??0, sessions};
 }
+export interface AgentSessionRequest {
+  timestamp?:string; provider?:string; model?:string; status?:number; success?:boolean;
+  tokens?:{input?:number;output?:number;cacheRead?:number;cacheCreation?:number;reasoning?:number};
+  latencyMs?:number; ttftMs?:number;
+}
 export async function fetchSessions(config:Config,key:string|undefined,fetchImpl:typeof fetch=fetch,signal?:AbortSignal,query='?limit=20&sort=lastSeen&order=desc'):Promise<AgentSessionsReport> {
   try {return mapSessions((await getGatewayJson(config,'sessions',key,fetchImpl,signal,'',query)).payload);}
   catch(error){
@@ -47,5 +52,21 @@ export async function fetchSessionDetail(config:Config,key:string|undefined,id:s
   if(!root)throw new Error('OmniRoute session detail response has an invalid shape');
   const mapped=mapSessions({sessions:[root.session],total:1,limit:1,offset:0});
   if(!mapped.sessions.length)throw new Error('OmniRoute session detail response has an invalid shape');
-  return {session:mapped.sessions[0], recentRequests:Array.isArray(root.recentRequests)?root.recentRequests:[]};
+  return {session:mapped.sessions[0], recentRequests:mapRecentRequests(root.recentRequests)};
+}
+/** Bounded, redacted projection of the gateway's recent-request rows; connection ids stay behind the account-quota scope. */
+export function mapRecentRequests(rows:unknown):AgentSessionRequest[] {
+  if(!Array.isArray(rows))return [];
+  const out:AgentSessionRequest[]=[];
+  for(const candidate of rows){
+    const r=asRecord(candidate);if(!r)continue;
+    const t=asRecord(r.tokens);
+    out.push({
+      timestamp:str(r.timestamp,40), provider:str(r.provider), model:str(r.model),
+      status:num(r.status), success:r.success===true||r.success===false?r.success:undefined,
+      ...(t?{tokens:{input:num(t.input),output:num(t.output),cacheRead:num(t.cacheRead),cacheCreation:num(t.cacheCreation),reasoning:num(t.reasoning)}}:{}),
+      latencyMs:num(r.latencyMs), ttftMs:num(r.ttftMs),
+    });
+  }
+  return out;
 }

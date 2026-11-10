@@ -179,7 +179,7 @@ test('registers usage and doctor commands without making background management r
   await h.install();assert.equal(typeof h.provider.usage.fetchUsage,'function');assert.equal(paths.length,0);
   await h.commands.get('omniroute-usage').handler('',h.ctx);assert.match(h.notices.at(-1)!,/Personal daily/);
   await h.commands.get('omniroute-doctor').handler('',h.ctx);assert.match(h.notices.at(-1)!,/Inference was not tested/);
-  assert.ok(paths.every(p=>p==='/v1/models'||p==='/v1/models/health'||p==='/api/usage/om-usage'));
+  assert.ok(paths.every(p=>p==='/v1/models'||p==='/v1/models/health'||p==='/api/usage/om-usage'||p==='/v1/me/status'||p==='/v1/me/sessions'));
 });
 test('catalog alerts suppress baseline and unchanged refresh, then summarize real changes',async()=>{
   let model='one';const h=harness(async()=>Response.json({data:[{id:model}]}));

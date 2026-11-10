@@ -38,9 +38,9 @@ HTTPS is recommended. URLs with embedded credentials, query parameters, or fragm
 | `/omniroute-refresh` | Force online discovery for this provider only |
 | `/omniroute-status` | Show catalog freshness, skipped/fallback counts, unmatched override counts, selected-model update status, and pricing caveats |
 | `/omniroute-model <ID or selector>` | Show accepted-model metadata and override guidance, or explain why the exact gateway ID was skipped |
-| `/omniroute-usage` | Fetch key-scoped usage and provider quota snapshots; personal limit rows honor explicit exceeded flags (3.8.54+) |
+| `/omniroute-usage` | Fetch key-scoped usage and provider quota snapshots, augmented with 3.8.54+ self-service monthly spend, token totals (including cache/reasoning splits) and limit entries when the key has the self:usage scope; personal limit rows honor explicit exceeded flags |
 | `/omniroute-sessions [id]` | List agent sessions the gateway attributes to this API key (OmniRoute 3.8.54+, self:usage key scope); with an id, show that session and its recent requests including cached-token breakdowns |
-| `/omniroute-doctor` | Validate local overrides and perform read-only endpoint, authentication, catalog, version-header, and optional health checks |
+| `/omniroute-doctor` | Validate local overrides and perform read-only endpoint, authentication, catalog, version-header, optional health, and agent-session attribution checks |
 | `/omniroute-last` | Show the last inspected chat request's routing/cost metadata |
 | `/omniroute-changes` | Show the latest meaningful catalog change |
 | `/omniroute-controls` | Show local settings; append a control and `on`/`off` to change it |

@@ -60,12 +60,42 @@ function mapUsage(payload:unknown,key:string|undefined):UsageReport {
  if(!report.limits.length)report.notes!.push('No usable usage data is available; this does not mean zero usage.');
  return report;
 }
+// OmniRoute 3.8.54 GET /v1/me/status: key-scoped monthly spend, token totals and limit entries.
+function mergeSelfStatus(report:UsageReport,payload:unknown):void{
+ const root=asRecord(payload);if(!root)return;
+ const usage=asRecord(root.usage);const cost=asRecord(usage?.cost);const tokens=asRecord(usage?.tokens);
+ if(cost && numeric(cost.usedUsd)!==undefined){
+  const resetsAt=reset(String(cost.resetAt??''));
+  const limit=numeric(cost.limitUsd);const used=numeric(cost.usedUsd)!;
+  const amount:UsageAmount={unit:'usd',used,...(limit!==undefined?{limit}:{})};
+  if(limit!==undefined && limit>0){amount.usedFraction=usedFraction(used,limit);amount.remaining=Math.max(0,limit-used);amount.remainingFraction=amount.remaining/limit;}
+  report.limits.push({id:'status:monthly',label:'Monthly spend',scope:{provider:PROVIDER,windowId:'status-monthly'},window:{id:'status-monthly',label:'monthly',...(resetsAt!==undefined?{resetsAt}:{})},amount,status:status(amount)});
+ }
+ for(const entry of Array.isArray(root.limits)?root.limits:[]){
+  const l=asRecord(entry);if(!l)continue;
+  const used=numeric(l.used),limit=numeric(l.limit);if(used===undefined && limit===undefined)continue;
+  const label=safeLabel(typeof l.label==='string'?l.label:typeof l.type==='string'?l.type:'limit','Limit');
+  const amount:UsageAmount={unit:'unknown',...(used!==undefined?{used}:{}),...(limit!==undefined?{limit}:{})};
+  if(used!==undefined && limit!==undefined && limit>0)amount.usedFraction=usedFraction(used,limit);
+  const resetsAt=reset(String(l.resetAt??''));
+  report.limits.push({id:'status:'+opaqueId('quota',label,used??0,limit??0),label:`${label} (status)`,scope:{provider:PROVIDER,windowId:'status'},window:{id:'status',label,...(resetsAt!==undefined?{resetsAt}:{})},amount,status:status(amount)});
+ }
+ const parts:string[]=[];
+ if(tokens)for(const [key,label] of [['inputTokens','input'],['outputTokens','output'],['cacheReadTokens','cache read'],['cacheCreationTokens','cache write'],['reasoningTokens','reasoning']] as const){const v=numeric(tokens[key]);if(v!==undefined)parts.push(`${label}: ${v}`);}
+ if(cost && numeric(cost.listPriceUsd)!==undefined)parts.push(`list-price: ${numeric(cost.listPriceUsd)}`);
+ if(parts.length)report.notes!.push(`Self-service monthly tokens/cost: ${parts.join(', ')}`);
+}
 export async function fetchUsageSnapshot(config:Config,key:string|undefined,fetchImpl:typeof fetch=fetch,signal?:AbortSignal):Promise<UsageReport>{
- try {return mapUsage((await getGatewayJson(config,'usage',key,fetchImpl,signal)).payload,key);}
+ try {
+  const report=mapUsage((await getGatewayJson(config,'usage',key,fetchImpl,signal)).payload,key);
+  // 3.8.54 self-service status is additive: never replace the legacy snapshot, never fail usage when it is absent.
+  try{mergeSelfStatus(report,(await getGatewayJson(config,'meStatus',key,fetchImpl,signal)).payload);}catch{}
+  return report;
+ }
  catch(error){if(error instanceof GatewayError && error.status===403)throw new Error('OmniRoute usage requires allowUsageCommand for this API key (HTTP 403); ask your gateway administrator to enable it if desired');if(error instanceof GatewayError && error.status===401)throw new Error('OmniRoute usage authentication failed (HTTP 401); check your API key');throw error;}
 }
 export function createUsageProvider(config:Config,fetchImpl?:typeof fetch):UsageProvider{
- return {id:PROVIDER,cacheVersion:3,retainLastGoodOnFailure:false,validatesCredentials:false,
+ return {id:PROVIDER,cacheVersion:4,retainLastGoodOnFailure:false,validatesCredentials:false,
  supports:params=>params.provider===PROVIDER && params.credential.type==='api_key',
  fetchUsage:(params,ctx)=>fetchUsageSnapshot(config,params.credential.apiKey,fetchImpl ?? ctx.fetch as typeof fetch,params.signal)};
 }

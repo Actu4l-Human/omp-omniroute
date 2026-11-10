@@ -1,5 +1,5 @@
 import type { Config } from './catalog.ts';
-export type GatewayEndpoint = 'models' | 'health' | 'usage' | 'sessions' | 'session';
+export type GatewayEndpoint = 'models' | 'health' | 'usage' | 'sessions' | 'meStatus';
 export class GatewayError extends Error {
   readonly status?: number;
   constructor(message: string, status?: number) {super(message); this.name='GatewayError';this.status=status;}
@@ -8,10 +8,11 @@ export function gatewayUrl(config: Config, endpoint: GatewayEndpoint, suffix = '
   const base=new URL(config.baseUrl);
   if(base.username || base.password || base.search || base.hash || !['http:','https:'].includes(base.protocol)) throw new GatewayError('Invalid OmniRoute base URL');
   const path=base.pathname.replace(/\/+$/,'');
-  if(!path.endsWith('/v1')) throw new GatewayError('OmniRoute base URL must end in /v1');
+  if(endpoint==='sessions' && suffix && !/^\/[\w.:%-]*$/.test(suffix)) throw new GatewayError('Invalid OmniRoute session id');
   if(endpoint==='models') base.pathname=path+'/models';
   else if(endpoint==='health') base.pathname=path+'/models/health';
   else if(endpoint==='usage'){base.pathname=path.slice(0,-3)+'/api/usage/om-usage';base.search='?format=json';}
+  else if(endpoint==='meStatus')base.pathname=path+'/me/status';
   else if(endpoint==='sessions'){base.pathname=path+'/me/sessions'+suffix;base.search=query??'';}
   else throw new GatewayError('Unsupported OmniRoute endpoint');
   return base.toString();

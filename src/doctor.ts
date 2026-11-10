@@ -47,5 +47,14 @@ export async function runDoctor(config:Config,key:string|undefined,fetchImpl:typ
   report.health={total:root.data.length,states,coverage};
   report.checks.push({id:'health',status:healthIds.size===0 || Object.keys(states).some(s=>s!=='ok')?'warning':'ok',message:`${healthIds.size===0?'No health observations received.':'Read-only model health received.'} Coverage (unique exact IDs): ${matched}/${coverage.catalog} catalog IDs matched, ${coverage.unobserved} unobserved, ${coverage.healthOnly} health-only. Unobserved catalog IDs are not evidence of unhealthy models. "ok" means no pause observed by this instance, not guaranteed upstream availability; connection-level pauses may be absent.`});
  }catch(error){const unsupported=error instanceof GatewayError && [404,405,501].includes(error.status??0);report.checks.push({id:'health',status:'warning',message:unsupported?'Optional model health endpoint is unsupported; the basic catalog GET succeeded.':error instanceof GatewayError?`Optional health check failed: ${error.message}`:'Optional health check failed.'});}
+ try{
+  await getGatewayJson(config,'sessions',key,fetchImpl);
+  report.checks.push({id:'sessions',status:'ok',message:'Agent-session attribution endpoint available (OmniRoute 3.8.54+). Chat requests carry X-OmniRoute-Session-Id; /omniroute-sessions lists attributed sessions.'});
+ }catch(error){
+  const status=error instanceof GatewayError?error.status:undefined;
+  if(status===403)report.checks.push({id:'sessions',status:'warning',message:'Agent-session endpoints refused (HTTP 403): the key lacks the self:usage scope. Attribution headers are still sent; ask your gateway administrator for the scope if you want /omniroute-sessions.'});
+  else if(status===404)report.checks.push({id:'sessions',status:'warning',message:'Agent-session endpoints not found: deployment predates OmniRoute 3.8.54. Attribution headers are still sent but ignored by the gateway.'});
+  else report.checks.push({id:'sessions',status:'warning',message:'Optional agent-session attribution check failed; /omniroute-sessions may not work on this deployment.'});
+ }
  return report;
 }
