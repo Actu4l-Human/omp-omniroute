@@ -1,6 +1,6 @@
 {
   "name": "@actu4l-human/omp-omniroute",
-  "version": "1.4.2",
+  "version": "1.5.0",
   "type": "module",
   "description": "A focused dynamic OmniRoute provider extension for Oh My Pi",
   "license": "AGPL-3.0-or-later",
