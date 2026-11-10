@@ -26,12 +26,14 @@ function mapUsage(payload:unknown,key:string|undefined):UsageReport {
  const personal=asRecord(root.personal);
  if(personal)for(const period of ['daily','weekly']){
   const used=numeric(personal[period+'SpentUsd']),limit=numeric(personal[period+'LimitUsd']),resetsAt=reset(personal[period+'ResetAtIso']);
-  if(used===undefined && limit===undefined)continue;
+  const exceeded=personal[period+'Exceeded']===true;
+  if(used===undefined && limit===undefined && !exceeded)continue;
   const amount:UsageAmount={unit:'usd',...(used!==undefined?{used}:{}),...(limit!==undefined?{limit}:{})};
   if(used!==undefined && limit!==undefined && limit>0){
    amount.usedFraction=usedFraction(used,limit);amount.remaining=Math.max(0,limit-used);amount.remainingFraction=amount.remaining/limit;
   }
-  report.limits.push({id:`personal:${period}`,label:`Personal ${period}`,scope:{provider:PROVIDER,windowId:period},window:{id:period,label:period,...(resetsAt!==undefined?{resetsAt}:{})},amount,status:status(amount)});
+  // OmniRoute 3.8.54 explicitly reports whether the key exceeded each window; trust it over ratio math.
+  report.limits.push({id:`personal:${period}`,label:`Personal ${period}`,scope:{provider:PROVIDER,windowId:period},window:{id:period,label:period,...(resetsAt!==undefined?{resetsAt}:{})},amount,status:exceeded?'exhausted':status(amount)});
  }
  const snapshots=Array.isArray(root.providers)&&root.providers.length?root.providers:root.provider?[root.provider]:[];
  const seen=new Set<string>();

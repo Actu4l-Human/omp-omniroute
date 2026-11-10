@@ -38,7 +38,8 @@ HTTPS is recommended. URLs with embedded credentials, query parameters, or fragm
 | `/omniroute-refresh` | Force online discovery for this provider only |
 | `/omniroute-status` | Show catalog freshness, skipped/fallback counts, unmatched override counts, selected-model update status, and pricing caveats |
 | `/omniroute-model <ID or selector>` | Show accepted-model metadata and override guidance, or explain why the exact gateway ID was skipped |
-| `/omniroute-usage` | Fetch key-scoped usage and provider quota snapshots |
+| `/omniroute-usage` | Fetch key-scoped usage and provider quota snapshots; personal limit rows honor explicit exceeded flags (3.8.54+) |
+| `/omniroute-sessions [id]` | List agent sessions the gateway attributes to this API key (OmniRoute 3.8.54+, self:usage key scope); with an id, show that session and its recent requests including cached-token breakdowns |
 | `/omniroute-doctor` | Validate local overrides and perform read-only endpoint, authentication, catalog, version-header, and optional health checks |
 | `/omniroute-last` | Show the last inspected chat request's routing/cost metadata |
 | `/omniroute-changes` | Show the latest meaningful catalog change |
@@ -59,6 +60,10 @@ OMP recreates request-time header resolver functions during discovery. Their obj
 Catalog freshness and selected-model updates are separate. A rejected or failed model update warns without marking a successfully fetched catalog stale or suppressing catalog change reporting. Status distinguishes metadata waiting for idle (`pending`), unavailable model authentication (`rejected`), update errors (`failed`), and a selected model absent from the latest discovered catalog (`missing`). Resolve authentication or retry `/omniroute-refresh` while idle as directed.
 
 When the selected model disappears or is filtered out, the extension warns but does not switch it automatically. Repeated unchanged refreshes do not repeat that warning. Select an available model or correct filters/overrides; the warning clears when the model returns, selection changes, or a new discovery failure makes the catalog stale.
+
+### Request attribution and rate-limit visibility (OmniRoute 3.8.54+)
+
+Chat requests always carry an opaque, stable `X-OmniRoute-Session-Id` derived from the OMP session, so the gateway can attribute spend to that session in its analytics. With `OMNIROUTE_STICKY_SESSIONS=true` the same tag additionally pins `X-Session-Id` for routing affinity; the tag never contains the session id, path, or working directory. `/omniroute-last` reports any upstream `anthropic-ratelimit-*` headers the gateway forwards under its per-key policy, redacted like other inspected metadata. `/omniroute-sessions` reads the gateway's key-scoped agent-session reports, which separate cache-read/cache-write input from uncached input. Both features degrade gracefully: deployments without session attribution or the self:usage key scope simply report nothing or a friendly error.
 
 ## Catalog-to-OMP mapping
 

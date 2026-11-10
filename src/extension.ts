@@ -4,6 +4,7 @@ import { PROVIDER, readConfig, fetchCatalog, mapCatalog, type Catalog, type Cata
 import {loadOverrides} from './overrides.ts';
 import {diffCatalog,type CatalogDiff} from './changes.ts';
 import {createUsageProvider,fetchUsageSnapshot} from './usage.ts';
+import {fetchSessions,fetchSessionDetail} from './sessions.ts';
 import {runDoctor} from './doctor.ts';
 import type {RequestRecord} from './telemetry.ts';
 import {randomUUID} from 'node:crypto';
@@ -195,6 +196,15 @@ export async function installOmniRoute(pi: ExtensionAPI, env: Record<string,stri
   pi.registerCommand('omniroute-usage',{description:'Read key-scoped gateway usage and quota data',handler:async(_args,ctx)=>{
     try{show(ctx,await fetchUsageSnapshot(config,env.OMNIROUTE_API_KEY,fetchImpl));}catch(error){show(ctx,error instanceof Error?error.message:'Usage lookup failed','warning');}
   }});
+  pi.registerCommand('omniroute-sessions',{description:'List agent sessions attributed to this API key (OmniRoute 3.8.54+): /omniroute-sessions [session id]',
+    handler:async(args,ctx)=>{
+      const input=args.trim();
+      try{
+        if(input){show(ctx,await fetchSessionDetail(config,env.OMNIROUTE_API_KEY,input,fetchImpl));return;}
+        const report=await fetchSessions(config,env.OMNIROUTE_API_KEY,fetchImpl);
+        show(ctx,report);
+      }catch(error){show(ctx,error instanceof Error?error.message:'Sessions lookup failed','warning');}
+    }});
   pi.registerCommand('omniroute-doctor',{description:'Validate local overrides and read-only authenticated catalog, version and health checks',handler:async(_args,ctx)=>{
     const report=await runDoctor(config,env.OMNIROUTE_API_KEY,fetchImpl);
     show(ctx,report,report.checks.some(c=>c.status==='error')?'error':report.checks.some(c=>c.status==='warning')?'warning':'info');

@@ -2,14 +2,19 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import {buildRequestHeaders, createRequestObserver, redactText} from '../src/telemetry.ts';
 const off={stickySessions:false,bypassCache:false,bypassMemory:false};
-test('request controls preserve other headers and use stable opaque session affinity',()=>{
+test('request controls preserve other headers and use stable opaque session attribution',()=>{
   const a=buildRequestHeaders({...off,stickySessions:true,bypassCache:true,bypassMemory:true},'private/path/session',{Authorization:'Bearer secret','X-Test':'ok'});
   const b=buildRequestHeaders({...off,stickySessions:true},'private/path/session');
   const c=buildRequestHeaders({...off,stickySessions:true},'another-session');
   assert.equal(a.Authorization,'Bearer secret');assert.equal(a['X-Test'],'ok');
-  assert.equal(a['X-Session-Id'],b['X-Session-Id']);assert.notEqual(a['X-Session-Id'],c['X-Session-Id']);
-  assert.ok(!a['X-Session-Id'].includes('private/path'));assert.equal(a['X-OmniRoute-No-Cache'],'true');assert.equal(a['x-omniroute-no-memory'],'true');
-  assert.deepEqual(buildRequestHeaders(off,'session'),{});
+  assert.equal(a['X-OmniRoute-Session-Id'],b['X-OmniRoute-Session-Id']);assert.notEqual(a['X-OmniRoute-Session-Id'],c['X-OmniRoute-Session-Id']);
+  assert.ok(!a['X-OmniRoute-Session-Id'].includes('private/path'));
+  assert.equal(a['X-Session-Id'],a['X-OmniRoute-Session-Id']);assert.equal(a['X-OmniRoute-No-Cache'],'true');assert.equal(a['x-omniroute-no-memory'],'true');
+  // Attribution is sent even without sticky sessions; sticky routing only pins X-Session-Id.
+  const plain=buildRequestHeaders(off,'private/path/session');
+  assert.equal(plain['X-OmniRoute-Session-Id'],b['X-OmniRoute-Session-Id']);assert.equal(plain['X-Session-Id'],undefined);
+  assert.deepEqual(buildRequestHeaders(off,'session'),{'X-OmniRoute-Session-Id':buildRequestHeaders(off,'session')['X-OmniRoute-Session-Id']});
+  assert.deepEqual(buildRequestHeaders(off),{});
 });
 test('observer records whitelisted metadata, separates reported from estimated and excludes prompts/headers',()=>{
   const o=createRequestObserver('auto/fast','variable',100);
@@ -39,6 +44,15 @@ test('new response resets retry metadata and unknown cost is not reported as fre
   const r=o.finish({usage:{cost:{total:0}}},10);
   assert.equal(r.cost.source,'unknown');assert.equal(r.cost.usd,undefined);assert.equal(r.requestId,'attempt2');
   assert.equal(r.gatewayCostHeaderUsd,0);assert.equal(r.observedResponses,2);
+});
+test('forwarded anthropic rate-limit headers are captured redacted and others ignored',()=>{
+  const o=createRequestObserver('model','unknown',0,['sk-secretkey']);
+  o.response({status:200,headers:{'anthropic-ratelimit-requests-remaining':'9','anthropic-ratelimit-tokens-remaining':'5000, sk-secretkey','anthropic-organization-id':'org','x-ratelimit-other':'1'}});
+  const r=o.finish({},10);
+  assert.deepEqual(r.rateLimits,{'anthropic-ratelimit-requests-remaining':'9','anthropic-ratelimit-tokens-remaining':'5000, [redacted]'});
+  assert.ok(!('anthropic-organization-id' in (r.rateLimits??{})));
+  const r2=createRequestObserver('model','unknown',0).finish({},10);
+  assert.equal(r2.rateLimits,undefined);
 });
 test('estimated cost is labeled and inspection strings remove controls and secrets',()=>{
   const o=createRequestObserver('fixed','estimated',0);const r=o.finish({usage:{cost:{total:0.2}}},10);

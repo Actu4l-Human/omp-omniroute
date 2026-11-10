@@ -1,10 +1,10 @@
 import type { Config } from './catalog.ts';
-export type GatewayEndpoint = 'models' | 'health' | 'usage';
+export type GatewayEndpoint = 'models' | 'health' | 'usage' | 'sessions' | 'session';
 export class GatewayError extends Error {
   readonly status?: number;
   constructor(message: string, status?: number) {super(message); this.name='GatewayError';this.status=status;}
 }
-export function gatewayUrl(config: Config, endpoint: GatewayEndpoint): string {
+export function gatewayUrl(config: Config, endpoint: GatewayEndpoint, suffix = '', query?: string): string {
   const base=new URL(config.baseUrl);
   if(base.username || base.password || base.search || base.hash || !['http:','https:'].includes(base.protocol)) throw new GatewayError('Invalid OmniRoute base URL');
   const path=base.pathname.replace(/\/+$/,'');
@@ -12,14 +12,15 @@ export function gatewayUrl(config: Config, endpoint: GatewayEndpoint): string {
   if(endpoint==='models') base.pathname=path+'/models';
   else if(endpoint==='health') base.pathname=path+'/models/health';
   else if(endpoint==='usage'){base.pathname=path.slice(0,-3)+'/api/usage/om-usage';base.search='?format=json';}
+  else if(endpoint==='sessions'){base.pathname=path+'/me/sessions'+suffix;base.search=query??'';}
   else throw new GatewayError('Unsupported OmniRoute endpoint');
   return base.toString();
 }
 /** Bounded same-origin GET. Never surfaces upstream error bodies, keys, or arbitrary exception text. */
-export async function getGatewayJson(config:Config, endpoint:GatewayEndpoint, key:string|undefined, fetchImpl:typeof fetch=fetch, signal?:AbortSignal):Promise<{payload:unknown;headers:Headers}> {
+export async function getGatewayJson(config:Config, endpoint:GatewayEndpoint, key:string|undefined, fetchImpl:typeof fetch=fetch, signal?:AbortSignal, suffix='', query?:string):Promise<{payload:unknown;headers:Headers}> {
   if(!key || key==='OMNIROUTE_API_KEY' || /[\r\n]/.test(key)) throw new GatewayError('Set a valid OMNIROUTE_API_KEY');
   if(signal?.aborted)throw new GatewayError('OmniRoute request cancelled');
-  const url=gatewayUrl(config,endpoint); const controller=new AbortController();
+  const url=gatewayUrl(config,endpoint,suffix,query); const controller=new AbortController();
   let rejectCancellation:(reason:GatewayError)=>void;
   const cancellation=new Promise<never>((_,reject)=>{rejectCancellation=reject;});
   const abort=()=>{rejectCancellation(new GatewayError('OmniRoute request cancelled'));controller.abort();};

@@ -37,6 +37,18 @@ test('personal overage and extreme finite ratios expose finite exhausted amounts
   for(const value of Object.values(r.limits[0].amount))if(typeof value==='number')assert.ok(Number.isFinite(value));
  }
 });
+test('OmniRoute 3.8.54 explicit exceeded flags override ratio-derived status',async()=>{
+ // Exceeded true exhausts even when the ratio alone would read as ok/warning.
+ const exceeded=await fetchUsageSnapshot(config,'secret',response({allowed:true,personal:{dailySpentUsd:1,dailyLimitUsd:5,dailyExceeded:true,weeklySpentUsd:2,weeklyLimitUsd:20,weeklyExceeded:true}}));
+ assert.equal(exceeded.limits[0].status,'exhausted');assert.equal(exceeded.limits[1].status,'exhausted');
+ assert.equal(exceeded.limits[0].amount.usedFraction,.2); // raw amounts stay informative
+ // Exceeded false preserves the ratio-derived status.
+ const fine=await fetchUsageSnapshot(config,'secret',response({allowed:true,personal:{dailySpentUsd:1,dailyLimitUsd:5,dailyExceeded:false}}));
+ assert.equal(fine.limits[0].status,'ok');
+ // A lone exceeded flag still reports the limit row rather than dropping it.
+ const bare=await fetchUsageSnapshot(config,'secret',response({allowed:true,personal:{weeklyExceeded:true}}));
+ assert.equal(bare.limits[0].id,'personal:weekly');assert.equal(bare.limits[0].status,'exhausted');
+});
 test('raw explicit percentage overage stays exhausted while invalid remaining and bare amounts stay unknown',async()=>{
  const r=await fetchUsageSnapshot(config,'secret',response({allowed:true,provider:{connectionId:'a',provider:'upstream',quotas:{
   overage:{usedPercentage:125,remainingPercentage:25},

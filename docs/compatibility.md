@@ -198,3 +198,40 @@ These observations prove live authentication, catalog parsing/mapping, read-only
 - [Catalog construction](https://github.com/cheaper-inference/OmniRoute/blob/a952f49838625656a3341feceb6e8a60c962b150/src/app/api/v1/models/catalog.ts)
 - [Usage implementation and permission](https://github.com/cheaper-inference/OmniRoute/blob/a952f49838625656a3341feceb6e8a60c962b150/src/lib/usage/internalUsageCommand.ts)
 - [Reported-cost behavior](https://github.com/cheaper-inference/OmniRoute/blob/a952f49838625656a3341feceb6e8a60c962b150/tests/unit/usage-openrouter-cost-4074.test.ts)
+
+## SDK 18.18.6 refresh (2026-11-10)
+
+Both SDK development pins were updated from 18.18.2 to the stable `latest`, **18.18.6** (published 2026-11-09), per the track-latest policy. The upstream delta 18.18.2 → 18.18.6 was reviewed from OMP `main` commits: the credential-scoped idle-cache classification fix, wait-delivered result labeling, GTK4/AT-SPI natives fix, and the new optional `session_before_shutdown` extension gate. None change a surface this extension uses; `session_shutdown` remains a notification-only teardown event, and this extension has no pre-close state needing the new gate, so no handler was added.
+
+| Local check | Observed outcome |
+| --- | --- |
+| `npm.cmd ls @oh-my-pi/pi-ai @oh-my-pi/pi-coding-agent` | Both resolve to 18.18.6 with all `@oh-my-pi/*` transitives deduped at 18.18.6 |
+| `npm.cmd run typecheck` | Passed |
+| `npm.cmd test` | 101 passed, 0 failed |
+| `npm.cmd run test:integration` | 11 passed, 0 failed; 67 expect calls |
+| `npm.cmd run test:cli` | Passed automatic/explicit loading, three model kinds, native/scoped chat and read-tool round trips, controls, reported cost, and cached fallback |
+
+OmniRoute remains at stable v3.8.53; no new server release or API change was found. Bun stays 1.4.4, satisfying the 18.18.6 engine requirement. These are local Windows fixture results; hosted Actions and live gateway behavior remain unverified by this pass.
+
+**Override scope correction:** the Zod advisory override had been exact-scoped to `@oh-my-pi/pi-coding-agent@18.18.2` and silently stopped applying after the pin bump, resolving vulnerable Zod 3.25.76 through Puppeteer 25.3.0. It is now scoped to `@^18.18.6`, and `npm ls` confirms puppeteer-core **25.16.0 (overridden)** → Chromium BiDi 157.0.8090-0 → Zod **4.6.7**. All suites above were rerun after this correction.
+
+## OmniRoute 3.8.54 feature adoption (2026-11-10)
+
+The deployment under review runs OmniRoute 3.8.54 (its release branch tip is now `8e72dbf546f2674da4e1ae9073ad4d4b65b836f0`, 142 commits past the previously reviewed `a952f498`). Four reviewed upstream features are now used by the extension; all degrade gracefully on older deployments.
+
+| Upstream feature | Extension change |
+| --- | --- |
+| Agent-session attribution (#14833) | Chat requests always send an opaque `X-OmniRoute-Session-Id` tag (same derivation as sticky affinity); sticky mode additionally pins `X-Session-Id` |
+| `GET /v1/me/sessions` (#14840) | New `/omniroute-sessions [id]` command lists key-scoped agent sessions; detail shows recent requests with cached-token breakdowns. Requires the key's self:usage scope; 401/403/404 get friendly errors |
+| Cached input token reporting (#16452) | Session rows map `cacheRead`/`cacheCreation`/`uncachedInput`; per-request inspection already recorded `cacheRead`/`cacheWrite` |
+| Personal exceeded flags (#14771 self-service) | `dailyExceeded`/`weeklyExceeded: true` marks the matching limit `exhausted` even when raw ratios read lower |
+| Anthropic rate-limit header forwarding (#14862) | `/omniroute-last` captures forwarded `anthropic-ratelimit-*` headers, redacted; absent on `auto`/`strip` policies or non-Anthropic routes |
+
+| Local check | Observed outcome |
+| --- | --- |
+| `npm.cmd run typecheck` | Passed |
+| `npm.cmd test` | 108 passed, 0 failed (new sessions suite, exceeded-flag and rate-limit-header cases; updated session-header pins) |
+| `npm.cmd run test:integration` | 11 passed, 0 failed; 67 expect calls |
+| `npm.cmd run test:cli` | Passed all scenarios including native/scoped chat round trips with the unconditional attribution header |
+
+These are local fixture results against SDK 18.18.6. Live 3.8.54 gateway behavior for the new endpoints was not exercised in this pass.

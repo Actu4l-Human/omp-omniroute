@@ -10,6 +10,7 @@ export interface RequestRecord {
   tokens?:{input?:number;output?:number;cacheRead?:number;cacheWrite?:number;total?:number};
   cost:{source:'reported'|'estimated'|'unknown';usd?:number};
   gatewayCostHeaderUsd?:number; ompTotalUsd?:number; cacheHit?:boolean;
+  rateLimits?:Record<string,string>;
 }
 const obj=(v:unknown):Record<string,unknown> => v && typeof v==='object' && !Array.isArray(v)?v as Record<string,unknown>:{};
 const nonnegative=(v:unknown):number|undefined=>typeof v==='number'&&Number.isFinite(v)&&v>=0?v:undefined;
@@ -21,10 +22,12 @@ export function redactText(s:string,secrets:string[]=[]):string {
 export function buildRequestHeaders(controls:RequestControls,sessionId?:string,headers:Record<string,string>={}):Record<string,string> {
   const result={...headers};
   const set=(name:string,value:string)=>{for(const old of Object.keys(result))if(old.toLowerCase()===name.toLowerCase())delete result[old];result[name]=value;};
-  if(controls.stickySessions && sessionId) {
+  if(sessionId) {
     const tag='omp-'+createHash('sha256').update('omp-omniroute/session/'+sessionId).digest('hex').slice(0,32);
-    set('X-Session-Id',tag);
+    // OmniRoute 3.8.54 attributes requests to agent sessions via x-omniroute-session-id
+    // (read before client-native session headers). Sticky routing additionally pins X-Session-Id.
     set('X-OmniRoute-Session-Id',tag);
+    if(controls.stickySessions)set('X-Session-Id',tag);
   }
   if(controls.bypassCache)set('X-OmniRoute-No-Cache','true');
   if(controls.bypassMemory)set('x-omniroute-no-memory','true');
@@ -48,6 +51,10 @@ export function createRequestObserver(modelId:string,pricingStatus:string|undefi
       if(raw && /^\d+(?:\.\d+)?$/.test(raw))info.gatewayCostHeaderUsd=nonnegative(Number(raw));
       const hit=h['x-omniroute-cache-hit'];if(hit==='true'||hit==='false')info.cacheHit=hit==='true';
       else if(h['x-omniroute-cache']==='HIT'||h['x-omniroute-cache']==='MISS')info.cacheHit=h['x-omniroute-cache']==='HIT';
+      // Per-key policy may forward upstream anthropic-ratelimit-* headers (OmniRoute 3.8.54).
+      const rateLimits:Record<string,string>={};
+      for(const [name,value] of Object.entries(h))if(name.startsWith('anthropic-ratelimit-') && typeof value==='string' && value.trim())rateLimits[name]=redactText(value,secrets);
+      if(Object.keys(rateLimits).length)info.rateLimits=rateLimits;
     },
     sse(data:string) {
       // Read only routing identifiers and usage total. Never retain prompt/content bytes.
